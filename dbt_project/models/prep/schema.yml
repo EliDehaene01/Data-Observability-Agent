@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: prep_sales_orders
+    description: >
+      Order-line grain: landing_vbak joined to landing_vbap. Two intentional
+      business rules are applied here (see prep_sales_orders.sql): cancelled
+      orders are excluded entirely, and incomplete orders are kept but
+      flagged via is_incomplete. This is the layer where source-to-target
+      row counts are expected to diverge from mock_erp on purpose.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+      - name: is_incomplete
+        description: True when the order's status is 'incomplete'. Incomplete orders are kept, not filtered out.

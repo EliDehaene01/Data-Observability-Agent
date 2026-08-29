@@ -1,0 +1,20 @@
+# Self-contained profile (kept inside the project, not ~/.dbt/) so the
+# repo doesn't depend on global machine state. Invoke with:
+#   dbt run --project-dir dbt_project --profiles-dir dbt_project
+# DUCKDB_PATH / DBT_TARGET match the vars already defined in .env.example.
+
+data_observability_agent:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'dev.duckdb') }}"
+      threads: 4
+    qa:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'qa.duckdb') }}"
+      threads: 4
+    prd:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'prd.duckdb') }}"
+      threads: 4

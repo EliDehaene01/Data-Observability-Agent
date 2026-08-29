@@ -1,0 +1,17 @@
+[project]
+name = "data-observability-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dbt-core>=1.12.3",
+    "dbt-duckdb>=1.11.0",
+    # Pinned below the latest resolvable build: pydantic-core's newest wheel
+    # gets blocked by this machine's Application Control policy at DLL-load
+    # time ("An Application Control policy has blocked this file"). This pair
+    # is the newest combination confirmed to load.
+    "pydantic==2.11.4",
+    "pydantic-core==2.33.2",
+    "psycopg2-binary>=2.9.10",
+]

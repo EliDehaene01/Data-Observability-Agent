@@ -1,0 +1,39 @@
+environments:
+  dev:
+    thresholds:
+      row_count_diff_pct: 5.0        # % difference allowed before flagging
+      sum_diff_pct: 5.0
+      sample_mismatch_pct: 10.0      # % of sampled rows allowed to mismatch
+    auto_actions:
+      can_publish_docs: true         # expected -> auto-publish to Confluence
+      can_create_ticket: true        # anomaly -> auto-create Jira ticket
+      can_auto_resolve: true         # low-severity issues can self-close
+      requires_human_approval: false # needs_review can skip Slack pause
+    notify:
+      slack_channel: "#recon-dev"
+
+  qa:
+    thresholds:
+      row_count_diff_pct: 2.0
+      sum_diff_pct: 2.0
+      sample_mismatch_pct: 5.0
+    auto_actions:
+      can_publish_docs: true
+      can_create_ticket: true
+      can_auto_resolve: false
+      requires_human_approval: true
+    notify:
+      slack_channel: "#recon-qa"
+
+  prd:
+    thresholds:
+      row_count_diff_pct: 0.5
+      sum_diff_pct: 0.5
+      sample_mismatch_pct: 1.0
+    auto_actions:
+      can_publish_docs: false        # even "expected" changes get eyes-on in prd
+      can_create_ticket: true
+      can_auto_resolve: false
+      requires_human_approval: true
+    notify:
+      slack_channel: "#recon-prd-alerts"

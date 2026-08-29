@@ -1,0 +1,57 @@
+version: 2
+
+sources:
+  - name: mock_erp
+    description: >
+      Synthetic SAP-style ERP tables seeded by mock_erp/seed_data.py --
+      see mock_erp/schema.sql for the source DDL.
+    schema: main
+    tables:
+      - name: vbak
+        description: Sales order header (VBAK-style).
+      - name: vbap
+        description: Sales order line items (VBAP-style).
+
+models:
+  - name: landing_vbak
+    description: 1:1 cleaned/typed pass-through of source vbak. No filtering, no business logic.
+    columns:
+      - name: order_id
+        description: Sales order number (VBELN). Primary key.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        tests:
+          - not_null
+      - name: order_date
+        tests:
+          - not_null
+      - name: status
+        tests:
+          - not_null
+
+  - name: landing_vbap
+    description: 1:1 cleaned/typed pass-through of source vbap. No filtering, no business logic.
+    columns:
+      - name: order_id
+        description: FK to landing_vbak.order_id.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('landing_vbak')
+                field: order_id
+      - name: item_id
+        description: Line item number within the order. Part of the composite primary key (order_id, item_id).
+        tests:
+          - not_null
+      - name: material_id
+        tests:
+          - not_null
+      - name: quantity
+        tests:
+          - not_null
+      - name: net_value
+        tests:
+          - not_null
