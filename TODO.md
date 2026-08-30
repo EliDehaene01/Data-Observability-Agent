@@ -8,7 +8,7 @@
   `mock_erp/schema.sql` (VBAK/VBAP-styled) + `mock_erp/seed_data.py` + `mock_erp/README.md`.
   Verified end-to-end against DuckDB.
 
-- [ ] **3. dbt project with real business logic**
+- [x] **3. dbt project with real business logic**
   `models/landing/` (1:1 with source: `landing_vbak`, `landing_vbap`) →
   `models/prep/` (`prep_sales_orders` — excludes cancelled orders, flags
   incomplete orders) → `models/serve/` (`serve_sales_orders`,
@@ -16,15 +16,15 @@
   dbt tests for keys, referential integrity, and no-cancelled-orders-leak-through.
   Must pass `dbt run` + `dbt test` against DuckDB.
 
-- [ ] **4. Connector abstraction layer**
+- [x] **4. Connector abstraction layer**
   `connectors/source/base.py`, `connectors/target/base.py` interfaces + Postgres/DuckDB
   implementations.
 
-- [ ] **5. Deterministic reconciliation engine**
+- [x] **5. Deterministic reconciliation engine**
   `reconciliation/aggregate_checks.py`, `sample_checks.py`, `models.py` (structured
   JSON output). No LLM in this layer.
 
-- [ ] **6. Persistent results store**
+- [x] **6. Persistent results store**
   Append-only table (DuckDB/Postgres) that every reconciliation run writes a row
   into — run timestamp, trigger type, environment, pass/fail, discrepancy summary.
   Both trigger workflows (below) write here. This is what the dashboard reads from;
