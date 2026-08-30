@@ -18,6 +18,7 @@ plus the usual POSTGRES_CONNECTION_STRING / DUCKDB_PATH / ANTHROPIC_API_KEY
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -25,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
 import requests
 
