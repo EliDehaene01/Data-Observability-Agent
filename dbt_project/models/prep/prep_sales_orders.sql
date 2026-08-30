@@ -8,7 +8,9 @@ with headers as (
     from {{ ref('landing_vbak') }}
     -- Business rule 1: cancelled orders are excluded entirely. They must
     -- never appear in this model or in anything built on top of it.
-    where status != 'cancelled'
+    -- Business rule 3 (TEST): in_process orders are also excluded for now --
+    -- finance only wants finalized order volume in this report.
+    where status not in ('cancelled', 'in_process')
 
 ),
 
