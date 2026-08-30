@@ -37,7 +37,8 @@ def get_recent_runs(
         params.append(limit)
         cursor = conn.execute(
             f"""
-            select distinct run_id, environment, trigger_type, run_timestamp
+            select distinct run_id, environment, trigger_type, run_timestamp,
+                   final_classification, confidence, pr_claims_no_impact, downgraded
             from results
             {where_sql}
             order by run_timestamp desc
@@ -57,6 +58,36 @@ def get_run_by_id(run_id: str, db_path: str | Path | None = None) -> list[dict[s
         cursor = conn.execute(
             'select * from results where run_id = ? order by check_type, "table", metric',
             [run_id],
+        )
+        return _rows_as_dicts(cursor)
+    finally:
+        conn.close()
+
+
+def get_all_results(
+    environment: str | None = None,
+    since: datetime | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Every result row (pass and flag), optionally scoped by environment
+    and/or a run_timestamp cutoff. Same shape as get_flagged_results but
+    without the status filter -- needed for summary counts that must
+    include passing checks too, which get_flagged_results alone can't
+    provide."""
+    conn = _connect(db_path)
+    try:
+        clauses = []
+        params: list[Any] = []
+        if environment is not None:
+            clauses.append("environment = ?")
+            params.append(environment)
+        if since is not None:
+            clauses.append("run_timestamp >= ?")
+            params.append(since)
+        where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+        cursor = conn.execute(
+            f"select * from results {where_sql} order by run_timestamp desc",
+            params,
         )
         return _rows_as_dicts(cursor)
     finally:

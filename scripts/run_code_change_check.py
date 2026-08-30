@@ -126,6 +126,8 @@ def main() -> None:
             f"diff_pct={r.diff_pct:.2f} threshold={r.threshold:.2f}"
         )
 
+    final_classification = confidence = pr_claims_no_impact = downgraded = None
+
     if flagged:
         sql_diff = _get_sql_diff(os.environ["PR_BASE_SHA"], os.environ["PR_HEAD_SHA"])
         pr_description = os.environ.get("PR_DESCRIPTION") or ""
@@ -138,10 +140,14 @@ def main() -> None:
         result = build_graph().invoke(state)
         final_state = AgentState(**result)
 
+        final_classification = final_state.final_classification
+        confidence = final_state.classification.confidence
+        pr_claims_no_impact = final_state.classification.pr_claims_no_impact
+        downgraded = final_state.downgraded
+
         print(
-            f"classify_discrepancy: final={final_state.final_classification} "
-            f"confidence={final_state.classification.confidence:.2f} "
-            f"downgraded={final_state.downgraded}"
+            f"classify_discrepancy: final={final_classification} "
+            f"confidence={confidence:.2f} downgraded={downgraded}"
         )
         comment_body = _format_comment(final_state)
     else:
@@ -150,7 +156,13 @@ def main() -> None:
 
     _post_pr_comment(comment_body)
 
-    run_id = write_run(run)
+    run_id = write_run(
+        run,
+        final_classification=final_classification,
+        confidence=confidence,
+        pr_claims_no_impact=pr_claims_no_impact,
+        downgraded=downgraded,
+    )
     print(f"Wrote run_id={run_id} to results_store.")
 
 
