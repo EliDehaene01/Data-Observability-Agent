@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: write      # to push the updated results_store/results.duckdb
   pull-requests: write # to post the summary comment
+  actions: write       # to dispatch publish_dashboard.yml (see below)
 
 env:
   POSTGRES_CONNECTION_STRING: postgresql://postgres:postgres@localhost:5432/mock_erp
@@ -105,6 +106,7 @@ jobs:
         run: uv run python scripts/run_code_change_check.py
 
       - name: Commit and push updated results_store to main
+        id: commit
         # results_store is a permanent audit trail (see CLAUDE.md) -- it
         # must survive regardless of whether this PR ever merges, so this
         # pushes straight to main rather than the PR's own branch (which
@@ -122,7 +124,18 @@ jobs:
           git add results_store/results.duckdb
           if git diff --cached --quiet; then
             echo "No changes to results_store/results.duckdb; nothing to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: update reconciliation results [skip ci]"
             git push origin main
+            echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Trigger dashboard publish
+        # Same reasoning as on_data_load.yml: a GITHUB_TOKEN-authored push
+        # doesn't trigger other workflows' `on: push` events, so this has
+        # to be dispatched explicitly.
+        if: steps.commit.outputs.committed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish_dashboard.yml

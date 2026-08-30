@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   contents: write # needed to push the updated results_store/results.duckdb back
+  actions: write  # needed to dispatch publish_dashboard.yml (see below)
 
 env:
   POSTGRES_CONNECTION_STRING: postgresql://postgres:postgres@localhost:5432/mock_erp
@@ -77,13 +78,26 @@ jobs:
         run: uv run python scripts/run_data_load_check.py
 
       - name: Commit and push updated results_store
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results_store/results.duckdb
           if git diff --cached --quiet; then
             echo "No changes to results_store/results.duckdb; nothing to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: update reconciliation results [skip ci]"
             git push
+            echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Trigger dashboard publish
+        # A GITHUB_TOKEN-authored push does not trigger other workflows'
+        # `on: push` events (GitHub's anti-loop protection), so
+        # publish_dashboard.yml's push trigger alone would never actually
+        # fire for this commit. Dispatch it explicitly instead.
+        if: steps.commit.outputs.committed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish_dashboard.yml
