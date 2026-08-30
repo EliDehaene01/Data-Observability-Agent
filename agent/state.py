@@ -16,11 +16,20 @@ Classification = Literal["expected", "needs_review", "anomaly"]
 
 class ClassificationResult(BaseModel):
     """Raw output of the classify_discrepancy LLM call, before the
-    deterministic confidence-threshold decision logic is applied."""
+    deterministic decision logic is applied."""
 
     classification: Classification
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    pr_claims_no_impact: bool
+    """True if the PR description asserts/implies no behavior change or no
+    impact, independent of whether the diff actually corroborates that
+    claim. Scored separately from `confidence` because a diagnostic found
+    the model can score high confidence in 'expected' from a diff that
+    mechanically explains a metric's direction/magnitude, even while its
+    own reasoning says the PR's impact claim is false -- confidence alone
+    doesn't capture PR dishonesty. See _apply_decision_logic's PR-honesty
+    override in classify_discrepancy.py."""
 
 
 class AgentState(BaseModel):
@@ -48,8 +57,9 @@ class AgentState(BaseModel):
     low-confidence "expected" to "needs_review"). The graph branches on
     this, never on `classification` directly."""
     downgraded: bool = False
-    """True if final_classification differs from classification.classification
-    (currently only happens for expected -> needs_review)."""
+    """True if final_classification differs from classification.classification --
+    either the confidence-threshold downgrade (expected -> needs_review) or
+    the PR-honesty override (any raw classification -> needs_review)."""
 
     # -- Populated by the drafting/action nodes (stubbed until phase 9) --
     confluence_doc: Optional[str] = None

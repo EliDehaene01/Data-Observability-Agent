@@ -2,23 +2,26 @@
 LLM (see CLAUDE.md). Forces structured (JSON-schema) output via Anthropic
 tool-use, never free text a downstream step has to parse.
 
-The LLM only ever produces (classification, confidence, reasoning). The
-decision logic that turns that into a *final* classification -- downgrading
-an under-confident "expected", always routing "needs_review" to a human and
-"anomaly" to a ticket regardless of confidence -- is deterministic Python in
-this file, not left to the model.
+The LLM only ever produces (classification, confidence, reasoning,
+pr_claims_no_impact). The decision logic that turns that into a *final*
+classification is deterministic Python in this file, not left to the
+model -- see _apply_decision_logic's docstring for the two rules (a
+confidence-threshold downgrade, and a PR-honesty override that fires
+regardless of confidence).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 import anthropic
 import yaml
 
 from agent.state import AgentState, Classification, ClassificationResult
+from reconciliation.models import ReconciliationRun
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +69,40 @@ _CLASSIFY_TOOL = {
                 "type": "string",
                 "description": "Short explanation of the evidence used, in 2-4 sentences.",
             },
+            "pr_claims_no_impact": {
+                "type": "boolean",
+                "description": (
+                    "True if the PR description asserts or implies there is no "
+                    "behavior change, no impact, or that the change is 'safe' -- "
+                    "regardless of whether the diff actually corroborates that "
+                    "claim. Score this independently of `confidence`: "
+                    "`confidence` measures whether the diff explains the "
+                    "reconciliation metric's direction/magnitude; this field "
+                    "measures whether the PR's own narrative about impact is "
+                    "honest. A PR can claim no impact while the diff clearly "
+                    "shows a change that would have impact -- that combination "
+                    "is exactly what this field exists to flag, even if you "
+                    "still lean toward 'expected' with high confidence."
+                ),
+            },
         },
-        "required": ["classification", "confidence", "reasoning"],
+        "required": ["classification", "confidence", "reasoning", "pr_claims_no_impact"],
     },
 }
+
+
+_TAG_LIKE = re.compile(r"</?[A-Za-z_][\w:.\-]*(?:\s[^<>]*)?/?>")
+
+
+def _sanitize_reasoning(text: str) -> str:
+    """The model occasionally leaks stray tool-call-format tokens (e.g.
+    `</invoke>`, `</reasoning>`) into free-text fields. This strips any
+    XML/HTML-like tag and tidies up the resulting whitespace, since
+    reasoning now goes straight into human-facing Confluence pages and
+    Slack messages, not just logs."""
+    cleaned = _TAG_LIKE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _load_confidence_threshold(environment: str) -> float:
@@ -106,19 +139,73 @@ Tables/metrics involved in the above results that the SQL diff actually mentions
 
 Classify the FLAGGED result(s) above. Your confidence must reflect whether the SQL diff
 itself corroborates the direction and magnitude of the discrepancy -- a plausible-sounding
-PR description alone is not sufficient evidence."""
+PR description alone is not sufficient evidence. Separately, set pr_claims_no_impact based
+on what the PR description asserts about impact, regardless of whether that assertion holds up."""
 
 
-def _apply_decision_logic(raw: ClassificationResult, confidence_threshold: float) -> tuple[Classification, bool]:
+def _has_uncorroborated_flagged_result(reconciliation_run: ReconciliationRun) -> bool:
+    """True if any result actually exceeded its threshold -- i.e. the kind
+    of discrepancy classify_discrepancy is being asked to explain in the
+    first place. Compared directly (diff_pct vs threshold) rather than
+    trusting the upstream `status` field, so this check doesn't silently
+    depend on how reconciliation/ happens to set it."""
+    return any(result.diff_pct > result.threshold for result in reconciliation_run.results)
+
+
+def _apply_decision_logic(
+    raw: ClassificationResult,
+    confidence_threshold: float,
+    reconciliation_run: ReconciliationRun,
+    diff_touched_tables: list[str],
+) -> tuple[Classification, bool]:
     """Deterministic post-processing of the LLM's raw classification. Never
-    left to the model -- see module docstring."""
+    left to the model -- see module docstring. Two rules, applied in order:
+
+    1. Confidence gating: an "expected" classification is only trusted at
+       or above the environment's confidence_threshold; below it, downgrade
+       to "needs_review". "needs_review"/"anomaly" are never gated on
+       confidence.
+    2. PR-honesty override: regardless of rule 1's outcome (and regardless
+       of the LLM's raw classification or confidence), if the PR claims no
+       impact while a reconciliation result actually exceeded its
+       threshold, force "needs_review". A live diagnostic found the model
+       can score confidence comfortably above threshold for an "expected"
+       classification even while its own reasoning says the PR's no-impact
+       claim is contradicted -- confidence alone doesn't capture PR
+       dishonesty, so this is checked separately and unconditionally, the
+       same way "anomaly" is never gated on confidence.
+
+       This rule additionally requires diff_touched_tables to be non-empty:
+       a "no impact" claim is only a dangerous claim *about the flagged
+       discrepancy* if the diff actually touches the affected table(s). A
+       genuinely no-op change (e.g. a comment) on a table that has nothing
+       to do with the divergence correctly earns pr_claims_no_impact=True
+       too, but that's irrelevant information, not PR dishonesty -- the
+       untouched-table case is already handled correctly by "anomaly" via
+       diff_touched_tables being empty, and this rule must not override
+       that (confirmed by a regression check after first shipping this
+       rule without the guard).
+    """
     if raw.classification == "expected":
         if raw.confidence >= confidence_threshold:
-            return "expected", False
-        return "needs_review", True  # don't trust an under-confident "expected" blindly
-    if raw.classification == "needs_review":
-        return "needs_review", False  # always human review, regardless of confidence
-    return "anomaly", False  # always ticket, regardless of confidence
+            classification, downgraded = "expected", False
+        else:
+            classification, downgraded = "needs_review", True  # don't trust an under-confident "expected" blindly
+    elif raw.classification == "needs_review":
+        classification, downgraded = "needs_review", False  # always human review, regardless of confidence
+    else:
+        classification, downgraded = "anomaly", False  # always ticket, regardless of confidence
+
+    if (
+        raw.pr_claims_no_impact
+        and diff_touched_tables
+        and _has_uncorroborated_flagged_result(reconciliation_run)
+    ):
+        if classification != "needs_review":
+            downgraded = True
+        classification = "needs_review"
+
+    return classification, downgraded
 
 
 def classify_discrepancy(state: AgentState) -> dict:
@@ -134,15 +221,20 @@ def classify_discrepancy(state: AgentState) -> dict:
     )
 
     tool_use_block = next(block for block in response.content if block.type == "tool_use")
-    raw = ClassificationResult(**tool_use_block.input)
+    tool_input = dict(tool_use_block.input)
+    tool_input["reasoning"] = _sanitize_reasoning(tool_input["reasoning"])
+    raw = ClassificationResult(**tool_input)
 
-    final_classification, downgraded = _apply_decision_logic(raw, confidence_threshold)
+    final_classification, downgraded = _apply_decision_logic(
+        raw, confidence_threshold, state.reconciliation_run, state.diff_touched_tables
+    )
 
     logger.info(
-        "classify_discrepancy: llm=%s (confidence=%.2f, threshold=%.2f) -> final=%s%s",
+        "classify_discrepancy: llm=%s (confidence=%.2f, threshold=%.2f, pr_claims_no_impact=%s) -> final=%s%s",
         raw.classification,
         raw.confidence,
         confidence_threshold,
+        raw.pr_claims_no_impact,
         final_classification,
         " (downgraded)" if downgraded else "",
     )

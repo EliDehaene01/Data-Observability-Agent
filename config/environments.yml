@@ -11,7 +11,7 @@ environments:
       requires_human_approval: false
       confidence_threshold: 0.6
     notify:
-      slack_channel: "#recon-dev"
+      slack_channel: "#data-observability-agent"
 
   qa:
     thresholds:
@@ -25,7 +25,7 @@ environments:
       requires_human_approval: true
       confidence_threshold: 0.75
     notify:
-      slack_channel: "#recon-qa"
+      slack_channel: "#data-observabiliity-agent"
 
   prd:
     thresholds:
@@ -39,4 +39,4 @@ environments:
       requires_human_approval: true
       confidence_threshold: 0.9
     notify:
-      slack_channel: "#recon-prd-alerts"
+      slack_channel: "#data-observabiliity-agent"
