@@ -134,12 +134,26 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   later without touching the results store or reconciliation engine.
 - `reconciliation/` — deterministic engine only.
 - `results_store/` — append-only persistence layer that both trigger workflows write
-  to (run timestamp, trigger type, environment, pass/fail, discrepancy summary). The
-  dashboard reads from here; it never queries reconciliation output directly.
+  to. One row per `ReconciliationResult` (run_id, environment, trigger_type,
+  run_timestamp, check_type, table, metric, source/target values, diff_pct,
+  threshold, status), plus four columns only ever populated for
+  `trigger_type="code_change"` runs: `final_classification`, `confidence`,
+  `pr_claims_no_impact`, `downgraded` — `on_data_load.yml` runs leave these
+  `NULL`, since data-load validation never classifies anything. These four were
+  added after the schema already had real rows in it; `writer.py`'s
+  `ALTER TABLE ADD COLUMN IF NOT EXISTS` keeps that backward-compatible, so
+  don't reintroduce a hard schema requirement that breaks reading old rows.
+  The dashboard reads from here; it never queries reconciliation output or
+  agent state directly.
 - `agent/` — LangGraph reasoning layer only.
 - `config/` — environment thresholds/rules as YAML, secrets loading via `.env`.
-- `.github/workflows/` — two entry points: `on_data_load.yml` (schedule),
-  `on_dbt_change.yml` (PR-triggered). Both write to `results_store/` after running.
+- `.github/workflows/` — three entry points: `on_data_load.yml` (schedule),
+  `on_dbt_change.yml` (PR-triggered) — both write to `results_store/` after
+  running, straight to `main` regardless of which branch triggered them (a
+  PR that never merges must not silently lose its audit trail) — and
+  `publish_dashboard.yml` (push to `main`, path-filtered to
+  `results_store/results.duckdb`), which regenerates and redeploys the
+  dashboard after either of the other two commits.
 
 ## What NOT to do
 
