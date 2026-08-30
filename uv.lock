@@ -240,6 +240,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "pydantic-core" },
+    { name = "requests" },
 ]
 
 [package.metadata]
@@ -251,6 +252,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
     { name = "pydantic", specifier = "==2.11.4" },
     { name = "pydantic-core", specifier = "==2.33.2" },
+    { name = "requests", specifier = ">=2.32.0" },
 ]
 
 [[package]]
