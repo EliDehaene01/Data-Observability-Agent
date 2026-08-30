@@ -22,8 +22,14 @@ from pathlib import Path
 
 import psycopg2
 import pytest
+from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The connector tests hit real local Postgres/DuckDB; their connection
+# settings live in .env (see tests/README.md). Nothing else in the project
+# auto-loads it (the CI workflows pass env vars explicitly), so do it here.
+load_dotenv(REPO_ROOT / ".env")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

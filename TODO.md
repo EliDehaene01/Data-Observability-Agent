@@ -53,7 +53,7 @@
   a different backend (e.g. Power BI, Metabase) can swap in later without touching
   the results store or reconciliation engine.
 
-- [ ] **12. Tests and polish**
+- [x] **12. Tests and polish**
   `tests/test_reconciliation.py`, `test_connectors.py`, `test_agent_graph.py`, plus
   `docs/architecture.md`.
 
