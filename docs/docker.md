@@ -95,6 +95,38 @@ installs `uv==0.11.28`, then `uv sync --frozen --no-dev` against the committed
 
 ---
 
+## Or pull the published image
+
+`.github/workflows/docker-publish.yml` builds the image and pushes it to
+**GitHub Container Registry** on every push to `main` (and on each GitHub
+Release). Skip the local build:
+
+```bash
+docker pull ghcr.io/elidehaene01/data-observability-agent:latest
+```
+
+Tags published: `latest` (tip of `main`), `sha-<short>` (every commit), and
+`<version>` on a tagged release. Use the same image name in place of
+`data-observability-agent` in any command below.
+
+First-time setup (one-off, repo owner only):
+
+1. Let the workflow run once — it creates the package under the repo's
+   **Packages**.
+2. Package settings → **Change visibility → Public** if you want anyone to pull
+   without authenticating. (Private is the default and is fine for personal
+   use — `docker login ghcr.io` with a PAT that has `read:packages`.)
+
+To push a one-off image by hand instead of via the workflow:
+
+```bash
+docker build -t ghcr.io/elidehaene01/data-observability-agent:latest .
+echo "$GHCR_PAT" | docker login ghcr.io -u EliDehaene01 --password-stdin   # PAT needs write:packages
+docker push ghcr.io/elidehaene01/data-observability-agent:latest
+```
+
+---
+
 ## Run it — against your own infrastructure
 
 ```bash

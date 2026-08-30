@@ -106,8 +106,15 @@ docker compose run --rm agent code-change \
 # → classify_discrepancy: final=expected confidence=0.80 downgraded=False
 ```
 
-Full container usage — building the image, running it against your own
-infrastructure, every env var and volume — is in
+Prefer a pre-built image? It's published to GitHub Container Registry on every
+push to `main`:
+
+```bash
+docker pull ghcr.io/elidehaene01/data-observability-agent:latest
+```
+
+Full container usage — building the image, pulling the published one, running it
+against your own infrastructure, every env var and volume — is in
 [`docs/docker.md`](docs/docker.md).
 
 ## Running locally (native)
