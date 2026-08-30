@@ -1,0 +1,89 @@
+name: Scheduled data-load validation
+
+# Pure deterministic reconciliation trigger (see CLAUDE.md) -- business logic
+# hasn't changed here, so no LLM/LangGraph code runs in this workflow at all.
+
+on:
+  schedule:
+    # 03:17 UTC nightly: off-peak for both US and EU business hours, and an
+    # arbitrary non-zero minute to avoid the top-of-hour scheduling crunch
+    # GitHub Actions warns about.
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+# Serialize runs so two concurrent jobs can't both try to push a commit
+# against the same base ref -- queue rather than cancel, since a data-load
+# check shouldn't be skipped.
+concurrency:
+  group: on-data-load
+  cancel-in-progress: false
+
+permissions:
+  contents: write # needed to push the updated results_store/results.duckdb back
+
+env:
+  POSTGRES_CONNECTION_STRING: postgresql://postgres:postgres@localhost:5432/mock_erp
+  DUCKDB_PATH: dev.duckdb
+
+jobs:
+  data-load-check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mock_erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Seed the ephemeral Postgres source
+        run: uv run python mock_erp/seed_data.py --engine postgres --num-orders 3000
+
+      - name: Load source data into the DuckDB warehouse
+        # dbt-duckdb has no native way to read a Postgres table directly --
+        # landing_vbak/landing_vbap expect vbak/vbap to already exist inside
+        # the same DuckDB file. See scripts/load_source_into_duckdb.py.
+        run: uv run python scripts/load_source_into_duckdb.py
+
+      - name: Run dbt to build the DuckDB target
+        run: uv run dbt run --project-dir dbt_project --profiles-dir dbt_project
+
+      - name: Run reconciliation and append to results_store
+        run: uv run python scripts/run_data_load_check.py
+
+      - name: Commit and push updated results_store
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results_store/results.duckdb
+          if git diff --cached --quiet; then
+            echo "No changes to results_store/results.duckdb; nothing to commit."
+          else
+            git commit -m "chore: update reconciliation results [skip ci]"
+            git push
+          fi
