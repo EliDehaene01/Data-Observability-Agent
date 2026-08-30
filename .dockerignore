@@ -1,0 +1,38 @@
+# Secrets / runtime config -- provided at `docker run` time, never baked in
+.env
+.env.*
+!.env.example
+
+# Seeded + warehouse databases -- generated at runtime into the /data volume.
+# NB: results_store/results.duckdb is the committed run history; it is
+# deliberately excluded here so the image never ships stale results.
+*.duckdb
+*.duckdb.wal
+
+# Python / uv local state
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# dbt local artifacts
+dbt_project/target/
+dbt_project/logs/
+dbt_project/dbt_packages/
+dbt_project/.user.yml
+
+# VCS + project meta not needed to run
+.git/
+.github/
+.gitignore
+*.md
+docs/
+tests/
+public/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

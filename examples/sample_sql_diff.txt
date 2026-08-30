@@ -1,0 +1,11 @@
+--- a/dbt_project/models/prep/prep_sales_orders.sql
++++ b/dbt_project/models/prep/prep_sales_orders.sql
+@@ -3,7 +3,9 @@ with headers as (
+     select *
+     from {{ ref('landing_vbak') }}
++    -- Business rule (finance request 2026-08): cancelled orders are
++    -- excluded from all downstream sales reporting entirely.
++    where status != 'cancelled'
+ ),
+ 
+ items as (

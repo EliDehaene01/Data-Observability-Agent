@@ -17,12 +17,14 @@ dependencies = [
     "langgraph>=0.2.0",
     "anthropic>=0.40.0",
     "requests>=2.32.0",
+    # Loads .env for local/native runs and the docker-compose demo; the CI
+    # workflows pass real env vars directly and never rely on it.
+    "python-dotenv>=1.0.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
-    "python-dotenv>=1.0.0",
 ]
 
 [tool.pytest.ini_options]

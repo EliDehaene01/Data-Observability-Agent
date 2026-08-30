@@ -1,0 +1,59 @@
+# Local demo / testing only -- NOT part of the shipped image.
+#
+#   docker compose up --build          # seeds Postgres, builds the dbt
+#                                      # warehouse, runs the data-load check
+#
+#   docker compose run --rm agent code-change \
+#       --sql-diff-file examples/sample_sql_diff.txt \
+#       --pr-description-file examples/sample_pr_description.txt
+#
+# Everything runs on the compose network -- no real external Postgres, no
+# host ports needed. See docs/docker.md.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mock_erp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mock_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  agent:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_CONNECTION_STRING: postgresql://postgres:postgres@postgres:5432/mock_erp
+      DUCKDB_PATH: /data/warehouse.duckdb
+      RESULTS_STORE_PATH: /data/results.duckdb
+      TARGET_ENVIRONMENT: dev
+      # code-change classification needs a real key; passed through from your
+      # shell / .env if set, otherwise left empty (data-load doesn't need it).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # only needed for `code-change --run-actions`
+      CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-}
+      CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:-}
+      CONFLUENCE_API_TOKEN: ${CONFLUENCE_API_TOKEN:-}
+      CONFLUENCE_SPACE_KEY: ${CONFLUENCE_SPACE_KEY:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      JIRA_ISSUE_TYPE: ${JIRA_ISSUE_TYPE:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      # supply your own thresholds/permissions without rebuilding
+      - ./config/environments.yml:/app/config/environments.yml:ro
+      # persist the warehouse + run history across `compose run` invocations
+      - agent-data:/data
+    # default `compose up` action: full pipeline, deterministic check
+    command: ["data-load", "--seed"]
+
+volumes:
+  agent-data:

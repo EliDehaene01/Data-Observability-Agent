@@ -1,0 +1,6 @@
+Exclude cancelled orders from prep_sales_orders
+
+Finance asked us to stop counting cancelled orders in sales reporting.
+Cancelled orders are ~17% of order volume in the current data, so
+row_count and net_value totals in prep_sales_orders / serve_sales_orders
+will drop by roughly that much. This is expected and intended.

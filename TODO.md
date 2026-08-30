@@ -59,14 +59,19 @@
 
 ## Product / distribution (post-MVP)
 
-- [ ] **13. Package as a Docker container**
-  Bundle the app + dependencies (Python, dbt-core, dbt-duckdb, connectors) into a
-  Docker image so it can run in any customer's infra/orchestration — not just GitHub
-  Actions. Chosen over a GitHub App for broader enterprise compatibility, since most
-  enterprises don't orchestrate this kind of workflow through GitHub itself. Customer
-  points the container at their own config (`environments.yml` pattern) and
-  credentials via environment variables. Helm chart is a possible later addition on
-  top, only relevant if targeting Kubernetes-native customers specifically.
+- [x] **13. Package as a Docker container**
+  `Dockerfile` (python:3.13-slim + uv + `uv.lock`), `docker-compose.yml` (app +
+  throwaway Postgres, demo only), `.dockerignore`, `docs/docker.md`, and a
+  single generic entrypoint `scripts/run_check.py {data-load,code-change}` that
+  takes all input from CLI args / env vars instead of assuming GitHub Actions.
+  Chosen over a GitHub App for broader enterprise compatibility, since most
+  enterprises don't orchestrate this kind of workflow through GitHub itself.
+  Customer mounts their own `config/environments.yml` and passes credentials via
+  environment variables. Helm chart is a possible later addition on top.
+  Entrypoint verified natively end-to-end (both check types, real Postgres/DuckDB
+  + real LLM, parity with the existing CI scripts); the `docker build` /
+  `docker compose up` path is written but was not run here (no Docker daemon in
+  the build environment).
 - [ ] **14. Validate demand before building further**
   Talk to contacts at SAP/dbt shops — confirm the problem framing resonates and
   surface their actual orchestration/deployment constraints (Docker vs. Kubernetes vs.

@@ -354,3 +354,57 @@ trail.
 
 Default run — `uv run pytest` — is fast, hits real local databases, and never
 touches the Anthropic API.
+
+---
+
+## 10. Distribution: the Docker model
+
+The MVP runs on GitHub Actions, but that's the *demo* substrate, not the
+product. The project ships as a **single container image** (`Dockerfile`,
+`docs/docker.md`) with one generic entrypoint — `scripts/run_check.py
+{data-load,code-change}` — that takes every input from CLI args and environment
+variables. It runs unchanged under cron, Airflow, Argo, a Kubernetes `Job`, or a
+plain `docker run`.
+
+### Why a container, not a GitHub App
+
+A GitHub App is the obvious-looking packaging for something triggered by dbt
+PRs. It was rejected deliberately:
+
+- **Most enterprises don't orchestrate data pipelines through GitHub.** The
+  dbt deploy that should trigger a code-change check often runs in Airflow,
+  Dagster, Jenkins, GitLab CI, or a vendor's managed scheduler. A GitHub App
+  can only react to events on GitHub.
+- **The source system is inside the customer's network.** The container runs
+  wherever it already has a route to the ERP and the warehouse; a hosted GitHub
+  App would need inbound access to private infrastructure.
+- **Config and credentials are already environment-shaped.** Every external
+  dependency is an env var (`POSTGRES_CONNECTION_STRING`, `ANTHROPIC_API_KEY`,
+  `CONFLUENCE_*`, …) and `config/environments.yml` is mounted as a volume — a
+  drop-in for anyone who has run the project locally.
+
+A Helm chart on top is a plausible later addition for Kubernetes-native
+customers; it doesn't change anything below it.
+
+### What's in the image vs. supplied at runtime
+
+| In the image | Supplied at runtime |
+|---|---|
+| App code (`agent/`, `reconciliation/`, `connectors/`, `dbt_project/`, …) | `POSTGRES_CONNECTION_STRING`, `ANTHROPIC_API_KEY`, `CONFLUENCE_*` / `JIRA_*` / `SLACK_WEBHOOK_URL` |
+| Pinned dependencies (`uv sync --frozen --no-dev`) | `config/environments.yml` (volume mount — customer's own thresholds) |
+| A default `config/environments.yml` (so it runs stand-alone) | The DuckDB warehouse + the results store (a `/data` volume) |
+| Bundled example PR diff/description for the demo | — |
+
+No `.env`, no credentials, and no seeded/warehouse `.duckdb` files are ever
+baked in (`.dockerignore` enforces this).
+
+### The CI entrypoints don't go away
+
+`scripts/run_data_load_check.py` and `run_code_change_check.py` stay as the
+GitHub-specific entrypoints — they read `PR_BASE_SHA`/`PR_HEAD_SHA`, post the PR
+summary comment, and push the updated results store back to `main`.
+`run_check.py` shares the same reconciliation and agent code underneath; the
+checks themselves behave identically. `code-change` defaults to
+reconciliation + classification only, and takes `--run-actions` to also fire the
+Confluence/Jira/Slack branch — so a container consumer gets the classification
+and the audit row without needing those accounts configured.

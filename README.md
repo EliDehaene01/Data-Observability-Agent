@@ -74,7 +74,43 @@ Design rules that hold everywhere: `reconciliation/` never calls an LLM;
 reached through a `base.py` interface; dev/qa/prd differences live in
 `config/environments.yml` as data, never as branching code.
 
-## Running locally
+## Tech stack
+
+Python 3.13 · [uv](https://docs.astral.sh/uv/) · **dbt** (dbt-core + dbt-duckdb)
+for the monitored transformations · **DuckDB** as the warehouse and the
+append-only results store · **Postgres** as the source ERP · **LangGraph** for
+the agent flow · **Anthropic** (structured tool-use output) for the one
+classification call · **pydantic** for every structured payload · GitHub Actions
+for the MVP triggers · **Docker** / docker-compose for portable distribution.
+
+## Quickstart (Docker)
+
+The easiest way to see the whole pipeline run — no Postgres, no accounts, no
+local Python setup. Needs only Docker.
+
+```bash
+docker compose up --build
+```
+
+This seeds a throwaway Postgres, builds the dbt warehouse, and runs the
+deterministic **data-load** check, printing the reconciliation results (you'll
+see the intended ~17% cancelled-order divergence flagged).
+
+To exercise the **code-change** path (the LLM classification), set
+`ANTHROPIC_API_KEY` in your shell or a local `.env`, then:
+
+```bash
+docker compose run --rm agent code-change \
+  --sql-diff-file examples/sample_sql_diff.txt \
+  --pr-description-file examples/sample_pr_description.txt
+# → classify_discrepancy: final=expected confidence=0.80 downgraded=False
+```
+
+Full container usage — building the image, running it against your own
+infrastructure, every env var and volume — is in
+[`docs/docker.md`](docs/docker.md).
+
+## Running locally (native)
 
 **Prerequisites:** Python 3.13, [uv](https://docs.astral.sh/uv/), and a local
 Postgres with a `mock_erp` database.
@@ -94,18 +130,24 @@ uv run python scripts/load_source_into_duckdb.py
 uv run dbt run --project-dir dbt_project --profiles-dir dbt_project
 ```
 
-Run the checks:
+Run the checks via the generic entrypoint (same one the container uses):
 
 ```bash
-# deterministic data-load reconciliation → appends to results_store/
-uv run python scripts/run_data_load_check.py
+# deterministic data-load reconciliation → appends to the results store
+uv run python scripts/run_check.py data-load
 
-# the LangGraph agent on a dbt diff (needs ANTHROPIC_API_KEY)
-uv run python scripts/run_code_change_check.py
+# reconciliation + LLM classification on a dbt diff (needs ANTHROPIC_API_KEY)
+uv run python scripts/run_check.py code-change \
+  --sql-diff-file examples/sample_sql_diff.txt \
+  --pr-description-file examples/sample_pr_description.txt
 
-# regenerate the static dashboard from results_store/
+# regenerate the static dashboard from the results store
 uv run python scripts/generate_dashboard.py public/index.html
 ```
+
+`scripts/run_data_load_check.py` and `scripts/run_code_change_check.py` are the
+GitHub Actions entry points — they additionally post PR comments and push the
+results store — and are invoked by the workflows, not run by hand.
 
 ## Tests
 
