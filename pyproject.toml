@@ -18,3 +18,12 @@ dependencies = [
     "anthropic>=0.40.0",
     "requests>=2.32.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
