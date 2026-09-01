@@ -485,6 +485,32 @@ Both trigger workflows commit their results straight to `main` regardless of
 which branch triggered them, so a PR that never merges still leaves an audit
 trail.
 
+### The Power BI companion (local, manual)
+
+Alongside the automated HTML dashboard there's a **local Power BI Project**
+(`powerbi/`, PBIP + TMDL — all text, committed). `scripts/export_results_for_powerbi.py`
+reads the results store through the same `results_store.reader` path the
+dashboard uses and writes two CSVs (`reconciliation_results.csv`,
+`classification_history.csv`, gitignored); the TMDL semantic model imports
+those and defines the measures (`Flag Rate %`, the classification counts,
+`Average Confidence`, `Runs by Environment`, `PR-Honesty Override Fire
+Count`).
+
+It is **not** CI-automated, and can't be: Power BI Desktop is a Windows GUI
+application with no headless mode, so no GitHub Actions job can open the
+`.pbip`, refresh it, or emit a `.pbix`. Refreshing means running the export
+script and clicking Refresh in Desktop by hand. This is the same shape of
+deliberate MVP limitation as `post_slack_notification` being notify-only
+(§6) — the runtime that would make it automatic doesn't exist here, so it
+ships as a documented local tool rather than a faked pipeline step.
+
+It **complements, not replaces** the HTML dashboard: the dashboard is the
+always-current, zero-setup, auto-published view (GitHub Pages, regenerated on
+every results commit); the Power BI companion is for someone who wants to
+pivot and chart the same data interactively. Both read only from
+`results_store/` — neither touches reconciliation or agent internals. Full
+usage in [`powerbi.md`](powerbi.md).
+
 ---
 
 ## 9. Tests

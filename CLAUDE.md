@@ -190,6 +190,13 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   don't reintroduce a hard schema requirement that breaks reading old rows.
   The dashboard reads from here; it never queries reconciliation output or
   agent state directly.
+- `powerbi/` — local Power BI companion: a committed PBIP / TMDL project
+  (text) over CSVs that `scripts/export_results_for_powerbi.py` dumps from the
+  results store (via `results_store.reader`, same boundary rule as the
+  dashboard — no reconciliation/agent code). `powerbi/data/` (the CSVs) is
+  gitignored. It's a **manual, local** artifact — Power BI Desktop has no
+  headless mode, so it is deliberately not in CI (see `docs/powerbi.md`); same
+  class of MVP limitation as `post_slack_notification` being notify-only.
 - `agent/` — LangGraph reasoning layer only.
 - `config/` — environment thresholds/rules as YAML, secrets loading via `.env`.
 - `.github/workflows/` — three entry points: `on_data_load.yml` (schedule),
@@ -228,3 +235,6 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   output.
 - Don't build out real SAP, Confluence, or Jira integrations speculatively — stub
   connectors are fine until there's a concrete reason to go further.
+- Don't try to wire the `powerbi/` companion into CI or the container — Power BI
+  Desktop can't run headless. The export script can run anywhere; opening/refreshing
+  the PBIP is a manual local step, on purpose.

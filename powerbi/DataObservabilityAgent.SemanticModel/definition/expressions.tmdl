@@ -1,0 +1,8 @@
+/// Folder holding the CSVs written by scripts/export_results_for_powerbi.py.
+/// Point this at your local checkout's powerbi/data/ directory, keep the
+/// trailing backslash, then Refresh.
+expression CsvFolder = "C:\Users\elide\Documents\GitHub\Data-Observability-Agent\powerbi\data\" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 4e3b6b8b-b905-41ba-a988-b9903fe0b7bf
+
+	annotation PBI_ResultType = Text
+

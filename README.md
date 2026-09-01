@@ -228,6 +228,12 @@ deploys it to GitHub Pages whenever either trigger commits new results. Swapping
 in Power BI / Metabase later is a new `ReportingConnector` class and nothing
 else.
 
+For ad-hoc slicing there's also a **local Power BI companion** — a committed
+PBIP / TMDL project in [`powerbi/`](powerbi/) over CSVs exported from the same
+results store (`scripts/export_results_for_powerbi.py`). It's a manual, local
+artifact (Power BI Desktop can't run headless), not part of CI — see
+[`docs/powerbi.md`](docs/powerbi.md).
+
 ## License
 
 [MIT](LICENSE)

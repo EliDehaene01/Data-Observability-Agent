@@ -234,6 +234,19 @@ dbt_project/.user.yml
 !connectors/target/**
 connectors/target/__pycache__/
 
+# Power BI companion: the exported CSVs are regenerated data
+# (scripts/export_results_for_powerbi.py). The PBIP/TMDL project itself is
+# checked in -- it's text.
+powerbi/data/
+# Per-user / per-machine Power BI Desktop state (localSettings.json holds a
+# DPAPI-encrypted, machine-bound blob). editorSettings.json + diagramLayout.json
+# are shareable and stay tracked.
+powerbi/**/.pbi/localSettings.json
+powerbi/**/.pbi/cache.abf
+powerbi/**/.pbi/unappliedChanges.json
+*.pbix
+*.abf
+
 # results_store/results.duckdb is intentionally checked in -- it's the
 # append-only run history that .github/workflows/on_data_load.yml pulls,
 # appends to, and pushes back each run. Every other *.duckdb file above

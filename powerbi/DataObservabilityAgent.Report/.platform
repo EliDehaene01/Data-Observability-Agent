@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "DataObservabilityAgent"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "b8852ffd-54d6-48ef-a957-80f1287dca44"
+  }
+}

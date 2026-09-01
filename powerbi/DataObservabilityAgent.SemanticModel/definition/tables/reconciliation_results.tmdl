@@ -1,0 +1,166 @@
+/// One row per ReconciliationResult from results_store (pass and flag,
+/// both trigger types). Exported by scripts/export_results_for_powerbi.py.
+table reconciliation_results
+	lineageTag: 7cc55b92-85d3-40a9-88d3-6789c546b68e
+
+	measure 'Flag Rate %' = DIVIDE(CALCULATE(COUNTROWS('reconciliation_results'), 'reconciliation_results'[status] = "flag"), COUNTROWS('reconciliation_results'))
+		formatString: 0.0%
+		lineageTag: 41546e43-5f5c-4a21-ad7c-40e683dfdbdb
+
+	/// Distinct reconciliation runs. Put `environment` on an axis to get
+	/// runs broken out per environment.
+	measure 'Runs by Environment' = DISTINCTCOUNT('reconciliation_results'[run_id])
+		formatString: 0
+		lineageTag: 1d681dd0-1c63-4b4c-9708-c0a85a6c1447
+
+	column run_id
+		dataType: string
+		lineageTag: bc53e08f-5353-4423-8681-743dac1783e8
+		summarizeBy: none
+		sourceColumn: run_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column environment
+		dataType: string
+		lineageTag: 681520d1-efd6-4e83-956a-4d5c57a047e0
+		summarizeBy: none
+		sourceColumn: environment
+
+		annotation SummarizationSetBy = Automatic
+
+	column trigger_type
+		dataType: string
+		lineageTag: 6a927c11-4499-45b4-b4ea-535215e9081d
+		summarizeBy: none
+		sourceColumn: trigger_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column run_timestamp
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 52249bef-551b-4b19-bb99-d6d9c88905aa
+		summarizeBy: none
+		sourceColumn: run_timestamp
+
+		annotation SummarizationSetBy = Automatic
+
+	column check_type
+		dataType: string
+		lineageTag: 287dcbb3-7661-4300-ae98-d07faf3cd568
+		summarizeBy: none
+		sourceColumn: check_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column table
+		dataType: string
+		lineageTag: bdf6fbaf-fd7b-4717-889f-6fdbb895b80c
+		summarizeBy: none
+		sourceColumn: table
+
+		annotation SummarizationSetBy = Automatic
+
+	column metric
+		dataType: string
+		lineageTag: 265fde91-d1b8-4f20-b862-dbcbcfd8d3d0
+		summarizeBy: none
+		sourceColumn: metric
+
+		annotation SummarizationSetBy = Automatic
+
+	column source_value
+		dataType: double
+		lineageTag: 1cbe560c-a2e9-478c-bbee-40f87f5564cd
+		summarizeBy: sum
+		sourceColumn: source_value
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column target_value
+		dataType: double
+		lineageTag: cd831f48-07e2-4986-a38c-e88e8529dcb1
+		summarizeBy: sum
+		sourceColumn: target_value
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column diff_pct
+		dataType: double
+		lineageTag: 0f366fd4-ef16-4404-a95c-af9d98807e24
+		summarizeBy: none
+		sourceColumn: diff_pct
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column threshold
+		dataType: double
+		lineageTag: 1edeacd6-99e4-4dca-bf5e-7e4276c068f2
+		summarizeBy: none
+		sourceColumn: threshold
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column status
+		dataType: string
+		lineageTag: 233944fb-ed20-42e8-8f68-1ae6803a6f65
+		summarizeBy: none
+		sourceColumn: status
+
+		annotation SummarizationSetBy = Automatic
+
+	column final_classification
+		dataType: string
+		lineageTag: f18e73e8-8806-4bb7-a22a-34e8cdd65bb7
+		summarizeBy: none
+		sourceColumn: final_classification
+
+		annotation SummarizationSetBy = Automatic
+
+	column confidence
+		dataType: double
+		lineageTag: 531be860-f4a4-49b6-84ad-094827f9aec1
+		summarizeBy: none
+		sourceColumn: confidence
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column pr_claims_no_impact
+		dataType: boolean
+		lineageTag: ca91956a-2f4a-4298-9f11-221890588729
+		summarizeBy: none
+		sourceColumn: pr_claims_no_impact
+
+		annotation SummarizationSetBy = Automatic
+
+	column downgraded
+		dataType: boolean
+		lineageTag: aba710c2-7ba4-43d5-a990-31046cca29e5
+		summarizeBy: none
+		sourceColumn: downgraded
+
+		annotation SummarizationSetBy = Automatic
+
+	partition reconciliation_results = m
+		mode: import
+		source =
+				let
+					Source = Csv.Document(File.Contents(CsvFolder & "reconciliation_results.csv"), [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]),
+					#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),
+					#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"run_id", type text}, {"environment", type text}, {"trigger_type", type text}, {"run_timestamp", type datetime}, {"check_type", type text}, {"table", type text}, {"metric", type text}, {"source_value", type number}, {"target_value", type number}, {"diff_pct", type number}, {"threshold", type number}, {"status", type text}, {"final_classification", type text}, {"confidence", type number}, {"pr_claims_no_impact", type logical}, {"downgraded", type logical}})
+				in
+					#"Changed Type"
+
+	annotation PBI_ResultType = Table
+

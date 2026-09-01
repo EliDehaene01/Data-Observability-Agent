@@ -77,6 +77,11 @@ published from CI (`publish_dashboard.yml`). If you want it from the container,
 run `python scripts/generate_dashboard.py <out.html>` against the same
 `/data` volume.
 
+The local Power BI companion (`docs/powerbi.md`) is likewise separate and
+**not** containerised — `python scripts/export_results_for_powerbi.py <dir>`
+dumps the same results store to CSV, but opening the PBIP project needs Power
+BI Desktop on the host.
+
 ---
 
 ## Build the image

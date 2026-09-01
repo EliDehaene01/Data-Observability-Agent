@@ -1,0 +1,118 @@
+/// One row per trigger_type="code_change" run: the agent's final
+/// classification plus the deterministic decision-logic signals
+/// (confidence, pr_claims_no_impact, downgraded) and check counts.
+/// Exported by scripts/export_results_for_powerbi.py.
+table classification_history
+	lineageTag: 7af95d3a-1c2e-4b6a-9d3f-2a1b0c4e5d6f
+
+	measure 'Expected count' = CALCULATE(COUNTROWS('classification_history'), 'classification_history'[final_classification] = "expected")
+		formatString: 0
+		lineageTag: a1111111-0000-4000-8000-000000000001
+
+	measure 'Needs Review count' = CALCULATE(COUNTROWS('classification_history'), 'classification_history'[final_classification] = "needs_review")
+		formatString: 0
+		lineageTag: a1111111-0000-4000-8000-000000000002
+
+	measure 'Anomaly count' = CALCULATE(COUNTROWS('classification_history'), 'classification_history'[final_classification] = "anomaly")
+		formatString: 0
+		lineageTag: a1111111-0000-4000-8000-000000000003
+
+	measure 'Average Confidence' = AVERAGE('classification_history'[confidence])
+		formatString: 0.00
+		lineageTag: a1111111-0000-4000-8000-000000000004
+
+	/// PR said "no impact" and the deterministic PR-honesty override
+	/// (Rule 2) forced a downgrade anyway. See docs/architecture.md sec 5.
+	measure 'PR-Honesty Override Fire Count' = CALCULATE(COUNTROWS('classification_history'), 'classification_history'[pr_claims_no_impact] = TRUE(), 'classification_history'[downgraded] = TRUE())
+		formatString: 0
+		lineageTag: a1111111-0000-4000-8000-000000000005
+
+	column run_id
+		dataType: string
+		lineageTag: b2222222-0000-4000-8000-000000000001
+		summarizeBy: none
+		sourceColumn: run_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column environment
+		dataType: string
+		lineageTag: b2222222-0000-4000-8000-000000000002
+		summarizeBy: none
+		sourceColumn: environment
+
+		annotation SummarizationSetBy = Automatic
+
+	column run_timestamp
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: b2222222-0000-4000-8000-000000000003
+		summarizeBy: none
+		sourceColumn: run_timestamp
+
+		annotation SummarizationSetBy = Automatic
+
+	column final_classification
+		dataType: string
+		lineageTag: b2222222-0000-4000-8000-000000000004
+		summarizeBy: none
+		sourceColumn: final_classification
+
+		annotation SummarizationSetBy = Automatic
+
+	column confidence
+		dataType: double
+		lineageTag: b2222222-0000-4000-8000-000000000005
+		summarizeBy: none
+		sourceColumn: confidence
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column pr_claims_no_impact
+		dataType: boolean
+		lineageTag: b2222222-0000-4000-8000-000000000006
+		summarizeBy: none
+		sourceColumn: pr_claims_no_impact
+
+		annotation SummarizationSetBy = Automatic
+
+	column downgraded
+		dataType: boolean
+		lineageTag: b2222222-0000-4000-8000-000000000007
+		summarizeBy: none
+		sourceColumn: downgraded
+
+		annotation SummarizationSetBy = Automatic
+
+	column total_checks
+		dataType: int64
+		formatString: 0
+		lineageTag: b2222222-0000-4000-8000-000000000008
+		summarizeBy: sum
+		sourceColumn: total_checks
+
+		annotation SummarizationSetBy = Automatic
+
+	column flagged_checks
+		dataType: int64
+		formatString: 0
+		lineageTag: b2222222-0000-4000-8000-000000000009
+		summarizeBy: sum
+		sourceColumn: flagged_checks
+
+		annotation SummarizationSetBy = Automatic
+
+	partition classification_history = m
+		mode: import
+		source =
+				let
+					Source = Csv.Document(File.Contents(CsvFolder & "classification_history.csv"), [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]),
+					#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),
+					#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"run_id", type text}, {"environment", type text}, {"run_timestamp", type datetime}, {"final_classification", type text}, {"confidence", type number}, {"pr_claims_no_impact", type logical}, {"downgraded", type logical}, {"total_checks", Int64.Type}, {"flagged_checks", Int64.Type}})
+				in
+					#"Changed Type"
+
+	annotation PBI_ResultType = Table
+
