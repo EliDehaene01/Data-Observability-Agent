@@ -18,7 +18,7 @@ import logging
 import os
 import uuid
 
-from connectors.docs.confluence import ConfluenceDocsConnector
+from connectors.docs.confluence import RECONCILIATION_PARENT_TITLE, ConfluenceDocsConnector
 from connectors.ticketing.jira import JiraTicketConnector
 from connectors.ticketing.slack import notify
 
@@ -46,7 +46,11 @@ def publish_docs(state: AgentState) -> dict:
         f"Reconciliation update - {state.reconciliation_run.environment} - "
         f"{state.reconciliation_run.run_timestamp:%Y-%m-%d %H:%M:%S UTC} - {uuid.uuid4().hex[:8]}"
     )
-    url = ConfluenceDocsConnector().publish_page(title=title, content=state.confluence_doc)
+    url = ConfluenceDocsConnector().publish_page(
+        title=title,
+        content=state.confluence_doc,
+        parent_title=RECONCILIATION_PARENT_TITLE,
+    )
     logger.info("publish_docs: published %r -> %s", title, url)
     return {}
 

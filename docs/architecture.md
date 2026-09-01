@@ -72,7 +72,8 @@ The split above is enforced structurally, not by convention:
 |---|---|---|
 | `reconciliation/` | **No.** Plain Python + SQL. | Emits pydantic models (`ReconciliationResult`, `ReconciliationRun`) and nothing else. |
 | `results_store/` | **No.** Append-only inserts. | One row per `ReconciliationResult`. Never updates or deletes. |
-| `agent/` | **Yes**, in exactly one node. | Consumes `reconciliation/`'s structured output. Never re-computes a result itself. |
+| `agent/` | **Yes**, in exactly two nodes (see §5a). | Consumes `reconciliation/`'s structured output (validation) or a model's compiled SQL (docs). Never re-computes a reconciliation result, never infers model structure. |
+| `model_docs/` | **No.** Parses dbt artifacts + a diff. | Reads `manifest.json` / `catalog.json`; emits pydantic (`ModelStructure`, `ServeField`) and rendered page bodies. |
 | `connectors/` | **No.** | `base.py` interface first; concrete drivers behind it. |
 
 `reconciliation/aggregate_checks.py` and `sample_checks.py` compare numbers and
@@ -101,6 +102,29 @@ pr_claims_no_impact:   boolean
 The model never returns free text that downstream code has to parse. The
 branch the graph takes is a dict key lookup, not a regex over prose.
 
+### Two LLM uses, two nodes
+
+There are exactly **two** places an LLM is called, and they are separate nodes
+with separate jobs:
+
+| | `classify_discrepancy` | `summarize_model_logic` |
+|---|---|---|
+| Purpose | **Validation** — is this discrepancy `expected` / `needs_review` / `anomaly`? | **Documentation** — describe, in plain English, what business logic a changed model performs. |
+| Input | reconciliation results + SQL diff + PR description | one model's compiled SQL |
+| In `agent/graph.py`? | Yes — it's the graph's reasoning step | **No** — called directly by `scripts/generate_model_docs.py` |
+| Gates anything? | Yes — its result blocks or clears the PR | No — pure documentation |
+| Structural facts | reasons *over* them, doesn't produce them | **never** produces them — see below |
+
+`summarize_model_logic` (`agent/nodes/summarize_model_logic.py`) only ever
+describes *logic*. A model's source tables, `ref()`/`source()` lineage, and
+column names/types are read deterministically from dbt's own `manifest.json`
+(lineage) and `catalog.json` (warehouse-observed columns + types) in
+`model_docs/manifest.py`. Those artifacts are authoritative and
+hallucination-free; asking an LLM to infer them from raw SQL would be strictly
+worse. So the per-model doc page is half deterministic (structure) and half
+generated (the logic paragraph), and the page itself labels which half is
+which.
+
 ---
 
 ## 3. The connector abstraction
@@ -128,6 +152,33 @@ both look the same from where it sits.
 Adding a new source system (a real SAP connection, Snowflake, BigQuery) means
 writing one new class against the existing interface — not adding a branch to
 calling code.
+
+### Confluence page hierarchy
+
+`DocsConnector.publish_page` takes an optional `parent_title` and a
+`content_format` (`"text"` | `"storage"`). The Confluence implementation never
+creates flat top-level pages: it ensures the parent/section page exists —
+looking it up first, creating it once only if missing, reusing it forever
+after — and publishes the real page as a **child** via the REST API's
+`ancestors` parameter.
+
+```
+Space  (CONFLUENCE_SPACE_KEY, e.g. SD)
+├── Reconciliation Updates          ← parent, auto-created once
+│   ├── Reconciliation update - dev - 2026-09-01 16:39:05 UTC - 22c41a9e
+│   └── …                            (one child per classified run, unique titles)
+└── Model Documentation             ← parent, auto-created once
+    ├── dbt model: landing_vbak
+    ├── dbt model: prep_sales_orders (stable title → updated in place, version bumped)
+    ├── …
+    └── Serve Layer Overview         (single data-dictionary page, regenerated)
+```
+
+Publishing is an **upsert**: a page whose title already exists in the space is
+updated (version incremented), not duplicated. Reconciliation reports use
+unique per-run titles (so effectively create-only); per-model doc pages use
+stable titles (so a re-run of the same PR revises the same page). A non-tree
+`DocsConnector` implementation is free to ignore `parent_title`.
 
 ### Injection-safe by construction
 
@@ -253,6 +304,108 @@ no-actual-flag case.
 
 ---
 
+## 5a. The required status check (PR blocking)
+
+`on_dbt_change.yml`'s `dbt-change-check` job is designed to be a **required
+status check** on `main`. It fails — turning the PR's check red and, once
+branch protection requires it, blocking the merge — whenever the agent's
+`final_classification` is `needs_review` or `anomaly`. `expected` is the only
+non-blocking outcome.
+
+### How the exit code is produced
+
+`scripts/run_code_change_check.py` doesn't exit non-zero itself. It runs the
+full pipeline, writes the `results_store/` audit row, then writes
+`blocking=true|false` and `final_classification=…` to `$GITHUB_OUTPUT`. The
+workflow's **last** step reads that output and does `exit 1` when
+`blocking == true`.
+
+The ordering matters and is deliberate:
+
+```
+classify → (Confluence model docs) → commit results to main → dashboard → ENFORCE
+```
+
+The audit trail is committed *before* the enforcing step fails the job. A
+blocked PR, or one that's later abandoned, still leaves a full history in
+`results_store/` and on the dashboard — the same principle as "both workflows
+commit straight to `main`". Failing the check must never cost the audit row.
+
+### Why a job exit code, not a Commit Status API call
+
+A separate `POST /statuses` call would need `statuses: write` and its own
+bookkeeping for the SHA and context string. The job's own conclusion is
+already a check GitHub knows about by name (`dbt-change-check`); making *that*
+red is the simplest thing that becomes a real required check with zero extra
+permissions. The repo owner enables the requirement once under **Settings →
+Branches** (documented in the README — code can't change repo settings).
+
+### `workflow_dispatch` mode
+
+The workflow also has a manual `workflow_dispatch` trigger with `sql_diff`,
+`pr_description`, and `environment` inputs, so the whole path can run without
+opening a PR. In that mode `GITHUB_EVENT_NAME=workflow_dispatch` and the
+scripts:
+
+- read `SYNTHETIC_SQL_DIFF` / `SYNTHETIC_PR_DESCRIPTION` directly instead of
+  `git diff`-ing a PR range,
+- log the would-be PR comment instead of posting it (there's no PR),
+- **skip** the results-store commit to `main` (a synthetic test must not
+  pollute the real audit trail or dashboard).
+
+The blocking-policy step still runs, so a manual run with a
+`needs_review`/`anomaly` scenario still goes red — which is how you test the
+gate.
+
+---
+
+## 5b. The per-model documentation pipeline
+
+On the same PR trigger (path-filtered to `dbt_project/models/**`),
+`scripts/generate_model_docs.py` regenerates Confluence documentation for every
+changed model. It is **documentation, not validation**: the workflow step is
+`continue-on-error`, so a Confluence outage can't block a PR.
+
+### Deterministic structure, generated logic
+
+```
+manifest.json  ──►  source() tables, ref() lineage, schema.yml columns   ┐
+catalog.json   ──►  complete column list + warehouse data types          ├─►  ModelStructure  (deterministic)
+                                                                         ┘
+compiled SQL   ──►  summarize_model_logic (LLM, forced structured)       ──►  ModelLogicSummary (generated)
+```
+
+`dbt docs generate` (a workflow step added before this one) produces
+`catalog.json` by inspecting the built warehouse — it's the authoritative,
+complete column list, which `manifest.json` alone is not (manifest only carries
+the columns documented in `schema.yml`). If `catalog.json` is somehow missing,
+`model_docs/manifest.py` falls back to the manifest's documented subset and
+marks the page as possibly incomplete.
+
+### What gets published
+
+- **One child page per changed model** in `landing/` `prep/` `serve/`, under a
+  **"Model Documentation"** parent: source tables, `ref()` lineage, a
+  field/type table, and the LLM logic summary + key transformations. Stable
+  title (`dbt model: <name>`) → updated in place on re-run.
+- **One "Serve Layer Overview" page**, regenerated whenever any model changed:
+  a data-dictionary table of every field across all `serve_` models, with its
+  business-friendly name (which *is* the serve column name — the serve layer is
+  rename-only, §4) and data type. No LLM involved.
+
+The changed-models list is parsed deterministically from the unified diff
+(`changed_model_names_from_diff`) — the same code path for a real `git diff`
+and a `workflow_dispatch` synthetic diff.
+
+### Why it's not a LangGraph node
+
+`summarize_model_logic` is a plain function, not a node in `agent/graph.py`. It
+has no branching, no state to carry, and runs on a different cadence (once per
+changed model, outside the validation flow). Wiring it into the graph would
+couple documentation generation to the validation state machine for no benefit.
+
+---
+
 ## 6. LangGraph flow
 
 `agent/graph.py`:
@@ -266,7 +419,8 @@ fetch_reconciliation_results → analyze_diff → classify_discrepancy   (LLM, s
 ```
 
 Every node except `classify_discrepancy` is deterministic Python. The action
-nodes call the real Confluence / Jira / Slack connectors.
+nodes call the real Confluence / Jira / Slack connectors. The second LLM call,
+`summarize_model_logic`, is **not** in this graph (see §5b).
 
 `AgentState` (`agent/state.py`) is the single shared schema carried across nodes
 — reconciliation results, diff context, classification, drafted outputs. Nodes
@@ -348,6 +502,14 @@ trail.
 - **`test_agent_graph.py`** — `classify_discrepancy`'s decision logic with the
   Anthropic call **mocked** by default. Covers every branch of Rules 1 and 2,
   including the `diff_touched_tables` edge case.
+- **`test_model_docs.py`** — `model_docs/` deterministic parsing (manifest +
+  catalog + diff) against small synthetic artifacts, `render.py` output +
+  escaping, and `summarize_model_logic` with the Anthropic call mocked. One
+  `@pytest.mark.live` summary check.
+- **`test_docs_connector.py`** — the Confluence hierarchy + upsert logic with
+  `requests` mocked: parent created once then reused, child published with
+  `ancestors`, same-title page updated with an incremented version, storage vs
+  text body handling.
 - **`@pytest.mark.live`** — a handful of tests that call the real Anthropic API,
   skipped unless `--run-live`. For manual sanity-checking after a prompt change,
   not CI.

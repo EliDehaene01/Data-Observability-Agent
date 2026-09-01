@@ -5,16 +5,48 @@ name: PR-triggered code-change validation
 # two-trigger split). scripts/run_code_change_check.py orchestrates the
 # existing reconciliation + agent pipeline; no classification logic is
 # duplicated in this workflow or that script.
+#
+# This job is meant to be a REQUIRED status check on `main` (see README.md
+# "Branch protection"). It fails -- blocking the PR -- when the agent's
+# final_classification is "needs_review" or "anomaly", i.e. anything that
+# isn't a clean "expected". The results_store audit trail is always
+# committed first, so a blocked (or never-merged) PR still leaves history.
+#
+# It also, on the same trigger, refreshes per-model Confluence documentation
+# for every changed model (deterministic structure from dbt's manifest.json
+# + catalog.json; an LLM-written business-logic summary from a node separate
+# from classify_discrepancy -- see scripts/generate_model_docs.py).
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "dbt_project/models/**"
+  workflow_dispatch:
+    # Manual fallback so the whole path can be exercised without opening a
+    # real PR. When triggered this way, run_code_change_check.py and
+    # generate_model_docs.py use these inputs directly instead of deriving
+    # them from a pull_request event, and the PR-comment step is skipped
+    # (the would-be comment is logged instead).
+    inputs:
+      sql_diff:
+        description: "Synthetic dbt models SQL diff (unified diff text) to classify"
+        required: true
+        type: string
+      pr_description:
+        description: "Synthetic PR description to reason over"
+        required: true
+        type: string
+      environment:
+        description: "Target environment (thresholds + confidence gate)"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, qa, prd]
 
 # A new push to the PR supersedes any in-flight check for that same PR.
 concurrency:
-  group: on-dbt-change-${{ github.event.pull_request.number }}
+  group: on-dbt-change-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -49,17 +81,23 @@ jobs:
       - name: Checkout PR head commit
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          # PR head on a pull_request event; the default branch tip on a
+          # manual workflow_dispatch run (no PR head exists).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # need the base commit reachable too, for the SQL diff step
 
-      - name: Determine target environment from PR base branch
+      - name: Determine target environment
         run: |
-          case "${{ github.base_ref }}" in
-            main) echo "TARGET_ENVIRONMENT=qa" >> "$GITHUB_ENV" ;;
-            develop|dev) echo "TARGET_ENVIRONMENT=dev" >> "$GITHUB_ENV" ;;
-            release|production) echo "TARGET_ENVIRONMENT=prd" >> "$GITHUB_ENV" ;;
-            *) echo "TARGET_ENVIRONMENT=dev" >> "$GITHUB_ENV" ;;
-          esac
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TARGET_ENVIRONMENT=${{ github.event.inputs.environment }}" >> "$GITHUB_ENV"
+          else
+            case "${{ github.base_ref }}" in
+              main) echo "TARGET_ENVIRONMENT=qa" >> "$GITHUB_ENV" ;;
+              develop|dev) echo "TARGET_ENVIRONMENT=dev" >> "$GITHUB_ENV" ;;
+              release|production) echo "TARGET_ENVIRONMENT=prd" >> "$GITHUB_ENV" ;;
+              *) echo "TARGET_ENVIRONMENT=dev" >> "$GITHUB_ENV" ;;
+            esac
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -85,12 +123,21 @@ jobs:
       - name: Run dbt to build the DuckDB target at the PR's HEAD state
         run: uv run dbt run --project-dir dbt_project --profiles-dir dbt_project
 
+      - name: Generate dbt docs artifacts (manifest.json + catalog.json)
+        # catalog.json needs the built warehouse (previous step) -- it's the
+        # authoritative, complete column list + data types for the per-model
+        # documentation pages. manifest.json (lineage) is refreshed too.
+        run: uv run dbt docs generate --project-dir dbt_project --profiles-dir dbt_project
+
       - name: Run reconciliation, classify, comment, and append to results_store
+        id: classify
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_DESCRIPTION: ${{ github.event.pull_request.body }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          SYNTHETIC_SQL_DIFF: ${{ github.event.inputs.sql_diff }}
+          SYNTHETIC_PR_DESCRIPTION: ${{ github.event.inputs.pr_description }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
@@ -105,14 +152,30 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: uv run python scripts/run_code_change_check.py
 
+      - name: Generate / update per-model Confluence documentation
+        # Documentation, not validation -- a failure here must not block the
+        # PR (continue-on-error), only surface as a warning annotation.
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SYNTHETIC_SQL_DIFF: ${{ github.event.inputs.sql_diff }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+        run: uv run python scripts/generate_model_docs.py
+
       - name: Commit and push updated results_store to main
         id: commit
         # results_store is a permanent audit trail (see CLAUDE.md) -- it
         # must survive regardless of whether this PR ever merges, so this
-        # pushes straight to main rather than the PR's own branch (which
-        # would silently discard the run's history if the PR is closed
-        # unmerged). The freshly-written results.duckdb is preserved across
-        # the branch switch by copying it out and back in.
+        # pushes straight to main rather than the PR's own branch. Skipped
+        # for workflow_dispatch: a manual synthetic-diff test run must not
+        # write to the real audit trail / dashboard.
+        if: ${{ always() && github.event_name == 'pull_request' }}
         run: |
           cp results_store/results.duckdb "$RUNNER_TEMP/results.duckdb"
           git fetch origin main
@@ -135,7 +198,24 @@ jobs:
         # Same reasoning as on_data_load.yml: a GITHUB_TOKEN-authored push
         # doesn't trigger other workflows' `on: push` events, so this has
         # to be dispatched explicitly.
-        if: steps.commit.outputs.committed == 'true'
+        if: ${{ always() && steps.commit.outputs.committed == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run publish_dashboard.yml
+
+      - name: Enforce PR-blocking policy
+        # This step's exit code is what makes `dbt-change-check` a real
+        # required check: non-zero here -> job fails -> the required status
+        # check on the PR is red. Runs last so the results_store commit above
+        # has already happened.
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.classify.outcome }}" != "success" ]; then
+            echo "::error::classification step did not succeed -- see its logs."
+            exit 1
+          fi
+          if [ "${{ steps.classify.outputs.blocking }}" = "true" ]; then
+            echo "::error::final_classification=${{ steps.classify.outputs.final_classification }} -- blocking this PR; a human needs to review before merge."
+            exit 1
+          fi
+          echo "final_classification=${{ steps.classify.outputs.final_classification }} -- not blocking."

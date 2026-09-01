@@ -37,6 +37,7 @@ COPY connectors/ ./connectors/
 COPY reconciliation/ ./reconciliation/
 COPY results_store/ ./results_store/
 COPY agent/ ./agent/
+COPY model_docs/ ./model_docs/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY examples/ ./examples/

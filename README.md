@@ -4,7 +4,9 @@ An agentic reconciliation system that verifies dbt views stay accurate and
 complete against source ERP systems (e.g. SAP). It runs **deterministic checks**
 for scheduled data-load validation, and uses **LLM-based reasoning** to classify
 code-change discrepancies as `expected`, `needs_review`, or `anomaly` — with
-automated Confluence / Jira / Slack follow-up.
+automated Confluence / Jira / Slack follow-up. On a dbt PR it also blocks the
+merge when the classification isn't a clean `expected`, and refreshes per-model
+Confluence documentation for every changed model.
 
 > Portfolio project. Built vendor-agnostic and cheap: local DuckDB / Postgres,
 > GitHub Actions free tier, free-tier Confluence / Jira / Slack. Real SAP and
@@ -34,7 +36,7 @@ reasoning and only spends an LLM call on the second half.
 | Trigger | Scheduled (nightly) | dbt PR / deploy |
 | Premise | Business logic unchanged → any divergence is a data problem | Business logic changed → is *this* divergence explained by *this* diff? |
 | Method | Row counts, `sum(net_value)`, sampled row comparison vs. per-environment thresholds | Reconciliation **+** a LangGraph agent that classifies the discrepancy |
-| LLM? | **Never** | **Only here**, one node, forced structured output |
+| LLM? | **Never** | **Only here.** One node for *validation* (`classify_discrepancy`); a second, separate node writes model docs (`summarize_model_logic`). Both forced structured output. |
 | Entry point | `.github/workflows/on_data_load.yml` | `.github/workflows/on_dbt_change.yml` |
 
 The agent's classification then branches:
@@ -51,6 +53,55 @@ under-confident `expected` is downgraded to `needs_review`, and a PR that claims
 of the model's confidence. See [`docs/architecture.md`](docs/architecture.md) for
 the full design, including the real diagnostic that made the second rule
 necessary.
+
+## What happens on a dbt PR
+
+When a PR touches `dbt_project/models/**`, `on_dbt_change.yml`:
+
+1. **Reconciles + classifies.** Builds the warehouse at the PR's HEAD, runs the
+   deterministic reconciliation, and — if anything is flagged — runs the
+   LangGraph agent to classify the discrepancy. The result is posted as a PR
+   comment and written to `results_store/`.
+2. **Blocks the merge unless the result is `expected`.** The `dbt-change-check`
+   job fails when `final_classification` is `needs_review` or `anomaly`, so a PR
+   that needs a human can't be merged on green. The audit row is written
+   *before* the job fails — a blocked or abandoned PR still leaves history.
+3. **Refreshes per-model Confluence docs.** For every changed model in
+   `landing/` `prep/` `serve/` it publishes/updates a child page under a
+   **"Model Documentation"** parent in Confluence, containing the model's source
+   tables, `ref()` lineage and columns/types (deterministic, straight from
+   dbt's `manifest.json` + `catalog.json`) plus a plain-English business-logic
+   summary (a second, separate LLM call — never used to infer structure). It
+   also regenerates a single **"Serve Layer Overview"** data-dictionary page.
+   This step never blocks the PR.
+4. **Publishes reconciliation reports as nested pages.** An `expected`
+   classification publishes its Confluence write-up as a child page under a
+   **"Reconciliation Updates"** parent — not a flat top-level page.
+
+### Branch protection (repo owner, one-time manual step)
+
+The blocking behavior above only actually *prevents* a merge once the check is
+marked **required**. Claude Code can't change repo settings, so the repo owner
+must do this by hand:
+
+> **Settings → Branches → Branch protection rules → `main` → Require status
+> checks to pass before merging →** add **`dbt-change-check`**.
+
+Until that's set, the job still runs and still goes red on a blocking
+classification — it just won't stop a merge.
+
+### Manual trigger (no PR needed)
+
+`on_dbt_change.yml` also has a `workflow_dispatch` trigger for testing the whole
+path without opening a PR:
+
+> **Actions → "PR-triggered code-change validation" → Run workflow →** paste a
+> synthetic `sql_diff` (unified-diff text), a `pr_description`, and pick an
+> `environment`.
+
+In this mode the scripts use the inputs directly, the real PR comment is skipped
+(logged instead), and the results-store commit to `main` is skipped so the
+manual run doesn't touch the audit trail or dashboard.
 
 ## Architecture at a glance
 
@@ -79,8 +130,10 @@ reached through a `base.py` interface; dev/qa/prd differences live in
 Python 3.13 · [uv](https://docs.astral.sh/uv/) · **dbt** (dbt-core + dbt-duckdb)
 for the monitored transformations · **DuckDB** as the warehouse and the
 append-only results store · **Postgres** as the source ERP · **LangGraph** for
-the agent flow · **Anthropic** (structured tool-use output) for the one
-classification call · **pydantic** for every structured payload · GitHub Actions
+the agent flow · **Anthropic** (structured tool-use output) for the
+classification call and the separate model-doc summary call · **dbt**
+`manifest.json` / `catalog.json` as the deterministic source for model lineage
+and columns · **pydantic** for every structured payload · GitHub Actions
 for the MVP triggers · **Docker** / docker-compose for portable distribution.
 
 ## Quickstart (Docker)
