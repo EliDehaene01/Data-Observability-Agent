@@ -74,21 +74,50 @@ jobs:
       - name: Run dbt to build the DuckDB target
         run: uv run dbt run --project-dir dbt_project --profiles-dir dbt_project
 
+      - name: Fetch existing results history from data-results
+        # results_store/results.duckdb is no longer tracked on main (see
+        # "data-results branch" below) -- pull the current append-only
+        # history from the dedicated branch first so this run's rows land
+        # on top of it, same as when the file lived on main.
+        run: |
+          git fetch origin data-results 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/data-results; then
+            git show origin/data-results:results_store/results.duckdb > results_store/results.duckdb
+          else
+            echo "data-results branch doesn't exist yet; starting a fresh results store."
+          fi
+
       - name: Run reconciliation and append to results_store
         run: uv run python scripts/run_data_load_check.py
 
-      - name: Commit and push updated results_store
+      - name: Commit and push updated results_store to data-results
+        # main requires PRs + a review (branch protection), so this bot
+        # can no longer push straight to it -- results_store/results.duckdb
+        # is CI-generated data, not human-reviewed source, so it goes to
+        # its own dedicated, unprotected branch instead. See "data-results
+        # branch" in README.md / architecture.md §8.
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp results_store/results.duckdb "$RUNNER_TEMP/results.duckdb"
+          rm -f results_store/results.duckdb
+          git fetch origin data-results 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/data-results; then
+            git checkout -B data-results origin/data-results
+          else
+            git checkout --orphan data-results
+            git rm -rf . > /dev/null 2>&1 || true
+          fi
+          mkdir -p results_store
+          cp "$RUNNER_TEMP/results.duckdb" results_store/results.duckdb
           git add results_store/results.duckdb
           if git diff --cached --quiet; then
             echo "No changes to results_store/results.duckdb; nothing to commit."
             echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: update reconciliation results [skip ci]"
-            git push
+            git push origin data-results
             echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
 

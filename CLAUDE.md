@@ -189,7 +189,15 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   `ALTER TABLE ADD COLUMN IF NOT EXISTS` keeps that backward-compatible, so
   don't reintroduce a hard schema requirement that breaks reading old rows.
   The dashboard reads from here; it never queries reconciliation output or
-  agent state directly.
+  agent state directly. **The `results_store/results.duckdb` file itself
+  lives on the dedicated `data-results` branch, not `main`** — `main`
+  requires PRs + a review (branch protection, for the `dbt-change-check`
+  gate below), so CI can no longer push straight to it, and this file is
+  CI-generated data rather than human-reviewed source anyway. `main` no
+  longer tracks the file at all (`.gitignore`); anything reading current
+  results (the dashboard build, `scripts/export_results_for_powerbi.py`)
+  pulls it from `origin/data-results` explicitly rather than assuming a
+  local checkout has it.
 - `powerbi/` — local Power BI companion: a committed PBIP / TMDL project
   (text) over CSVs that `scripts/export_results_for_powerbi.py` dumps from the
   results store (via `results_store.reader`, same boundary rule as the
@@ -201,11 +209,21 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
 - `config/` — environment thresholds/rules as YAML, secrets loading via `.env`.
 - `.github/workflows/` — three entry points: `on_data_load.yml` (schedule),
   `on_dbt_change.yml` (PR-triggered, plus a `workflow_dispatch` manual
-  fallback) — both write to `results_store/` after running, straight to `main`
-  regardless of which branch triggered them (a PR that never merges must not
-  silently lose its audit trail) — and `publish_dashboard.yml` (push to `main`,
-  path-filtered to `results_store/results.duckdb`), which regenerates and
-  redeploys the dashboard after either of the other two commits.
+  fallback) — both write to `results_store/` after running, straight to the
+  dedicated `data-results` branch regardless of which branch triggered them
+  (a PR that never merges must not silently lose its audit trail) — and
+  `publish_dashboard.yml` (push to `data-results`, path-filtered to
+  `results_store/results.duckdb`), which regenerates and redeploys the
+  dashboard after either of the other two commits. `main` requires PRs + a
+  review (branch protection, for the `dbt-change-check` gate below), so
+  neither trigger workflow can push straight to `main` any more; each pulls
+  the existing history from `data-results` first (so runs still append
+  rather than clobber), appends its new rows, and pushes back to
+  `data-results`, creating the branch on first run if it doesn't exist yet.
+  `publish_dashboard.yml` checks out `main` for the dashboard-generation
+  code but fetches `results_store/results.duckdb` from `data-results`
+  explicitly (`git show origin/data-results:...`) rather than relying on
+  its own checkout to have it.
   - `on_dbt_change.yml`'s `dbt-change-check` **job** is the required status
     check: its final step exits non-zero when the classification is blocking
     (`needs_review`/`anomaly`), after the results commit. Enabling branch
@@ -214,8 +232,8 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   - The `workflow_dispatch` inputs (`sql_diff`, `pr_description`, `environment`)
     let the whole path run without a real PR. In that mode the scripts read the
     inputs directly, the real PR comment is skipped (logged instead), and the
-    results-store commit to `main` is skipped so manual tests don't pollute the
-    audit trail / dashboard.
+    results-store commit to `data-results` is skipped so manual tests don't
+    pollute the audit trail / dashboard.
   - The same workflow regenerates per-model Confluence docs (`dbt docs generate`
     → `scripts/generate_model_docs.py`) for every changed model. That step is
     `continue-on-error` — documentation must not block a PR.

@@ -38,9 +38,11 @@ exploration; it does not replace it.
 uv run python scripts/export_results_for_powerbi.py
 ```
 
-Reads `results_store/results.duckdb` (via `results_store.reader`, the same
-read-only path the dashboard uses — no reconciliation or agent code) and
-writes:
+Fetches the current `results_store/results.duckdb` from the `data-results`
+branch (`main` no longer tracks it — see
+[`architecture.md`](architecture.md#8-results-store-and-dashboard)), reads it
+via `results_store.reader` (the same read-only path the dashboard uses — no
+reconciliation or agent code), and writes:
 
 | file | grain | columns |
 |---|---|---|
