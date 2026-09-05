@@ -247,8 +247,11 @@ powerbi/**/.pbi/unappliedChanges.json
 *.pbix
 *.abf
 
-# results_store/results.duckdb is intentionally checked in -- it's the
-# append-only run history that .github/workflows/on_data_load.yml pulls,
-# appends to, and pushes back each run. Every other *.duckdb file above
-# (dbt's dev/qa/prd target databases) stays ignored.
-!results_store/results.duckdb
+# results_store/results.duckdb used to be checked in on main, but main now
+# requires PRs + a review (branch protection, added for the dbt-change-check
+# gate) and CI can no longer push straight to it. The append-only run
+# history that on_data_load.yml / on_dbt_change.yml pull, append to, and
+# push back each run now lives on its own dedicated, unprotected
+# data-results branch instead (see README.md / docs/architecture.md §8) --
+# so on main it's just generated/ephemeral data like every other *.duckdb
+# file above, and stays ignored.

@@ -3,10 +3,20 @@ name: Publish dashboard
 # Decoupled from both trigger workflows (see CLAUDE.md's dashboard boundary
 # rule): this only ever reads results_store/results.duckdb after one of
 # them commits to it, and never touches live reconciliation/agent state.
+#
+# Both trigger workflows now commit results_store/results.duckdb to the
+# dedicated data-results branch, not main (main requires PRs + a review --
+# see "data-results branch" in README.md / architecture.md §8), so this
+# workflow's push trigger follows that branch instead. In practice a
+# GITHUB_TOKEN-authored push doesn't fire another workflow's `on: push`
+# (GitHub's anti-loop protection), so both trigger workflows dispatch this
+# one explicitly (`gh workflow run publish_dashboard.yml`) right after they
+# push -- the push trigger below exists for the rare case of a human
+# manually pushing to data-results.
 
 on:
   push:
-    branches: [main]
+    branches: [data-results]
     paths:
       - "results_store/results.duckdb"
   workflow_dispatch: {}
@@ -25,7 +35,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
+        # Always main: this is where scripts/generate_dashboard.py and
+        # connectors/ live. data-results only carries results.duckdb (see
+        # below) -- checking it out directly here would be missing the app
+        # code entirely if this ever runs off its native push trigger.
         uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Fetch latest results from data-results
+        run: |
+          if git ls-remote --exit-code --heads origin data-results >/dev/null 2>&1; then
+            git fetch origin data-results
+            git show origin/data-results:results_store/results.duckdb > results_store/results.duckdb
+          else
+            echo "::warning::data-results branch does not exist yet -- no reconciliation results to show."
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1

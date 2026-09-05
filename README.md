@@ -87,6 +87,11 @@ must do this by hand:
 > **Settings → Branches → Branch protection rules → `main` → Require status
 > checks to pass before merging →** add **`dbt-change-check`**.
 
+Protecting `main` this way is also *why* `results_store/results.duckdb` no
+longer lives there — see [the `data-results` branch](#the-data-results-branch)
+above. Don't add branch protection to `data-results` itself; it needs to
+stay pushable by the bot.
+
 Until that's set, the job still runs and still goes red on a blocking
 classification — it just won't stop a merge.
 
@@ -227,6 +232,22 @@ from `results_store/results.duckdb` only. `publish_dashboard.yml` regenerates an
 deploys it to GitHub Pages whenever either trigger commits new results. Swapping
 in Power BI / Metabase later is a new `ReportingConnector` class and nothing
 else.
+
+### The `data-results` branch
+
+`main` requires PRs plus a review (branch protection — see below), so
+`on_data_load.yml` and `on_dbt_change.yml` can no longer push
+`results_store/results.duckdb` straight to it. That file is CI-generated
+data, not human-reviewed source, so it goes to its own dedicated,
+unprotected `data-results` branch instead: each run fetches the existing
+history from `data-results` first, appends its new rows, and pushes back
+there (creating the branch on first run if it doesn't exist yet). `main`
+itself no longer tracks `results_store/results.duckdb` at all.
+`publish_dashboard.yml` checks out `main` for the dashboard code but reads
+the results file from `origin/data-results` explicitly, and
+`scripts/export_results_for_powerbi.py` does the same for local use. See
+[`docs/architecture.md`](docs/architecture.md#8-results-store-and-dashboard)
+for the full mechanics.
 
 For ad-hoc slicing there's also a **local Power BI companion** — a committed
 PBIP / TMDL project in [`powerbi/`](powerbi/) over CSVs exported from the same

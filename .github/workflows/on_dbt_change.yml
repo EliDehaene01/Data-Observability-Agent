@@ -129,6 +129,19 @@ jobs:
         # documentation pages. manifest.json (lineage) is refreshed too.
         run: uv run dbt docs generate --project-dir dbt_project --profiles-dir dbt_project
 
+      - name: Fetch existing results history from data-results
+        # results_store/results.duckdb is no longer tracked on main (see
+        # "data-results branch" below) -- pull the current append-only
+        # history from the dedicated branch first so this run's rows land
+        # on top of it, same as when the file lived on main.
+        run: |
+          git fetch origin data-results 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/data-results; then
+            git show origin/data-results:results_store/results.duckdb > results_store/results.duckdb
+          else
+            echo "data-results branch doesn't exist yet; starting a fresh results store."
+          fi
+
       - name: Run reconciliation, classify, comment, and append to results_store
         id: classify
         env:
@@ -168,29 +181,41 @@ jobs:
           CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
         run: uv run python scripts/generate_model_docs.py
 
-      - name: Commit and push updated results_store to main
+      - name: Commit and push updated results_store to data-results
         id: commit
         # results_store is a permanent audit trail (see CLAUDE.md) -- it
         # must survive regardless of whether this PR ever merges, so this
-        # pushes straight to main rather than the PR's own branch. Skipped
-        # for workflow_dispatch: a manual synthetic-diff test run must not
-        # write to the real audit trail / dashboard.
+        # pushes to the dedicated data-results branch rather than the PR's
+        # own branch. It no longer pushes to main: main requires PRs + a
+        # review (branch protection, added for the dbt-change-check gate),
+        # so this bot can't push straight to it any more, and
+        # results_store/results.duckdb is CI-generated data rather than
+        # human-reviewed source anyway -- see "data-results branch" in
+        # README.md / architecture.md §8. Skipped for workflow_dispatch: a
+        # manual synthetic-diff test run must not write to the real audit
+        # trail / dashboard.
         if: ${{ always() && github.event_name == 'pull_request' }}
         run: |
           cp results_store/results.duckdb "$RUNNER_TEMP/results.duckdb"
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
-          cp "$RUNNER_TEMP/results.duckdb" results_store/results.duckdb
+          rm -f results_store/results.duckdb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin data-results 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/data-results; then
+            git checkout -B data-results origin/data-results
+          else
+            git checkout --orphan data-results
+            git rm -rf . > /dev/null 2>&1 || true
+          fi
+          mkdir -p results_store
+          cp "$RUNNER_TEMP/results.duckdb" results_store/results.duckdb
           git add results_store/results.duckdb
           if git diff --cached --quiet; then
             echo "No changes to results_store/results.duckdb; nothing to commit."
             echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: update reconciliation results [skip ci]"
-            git push origin main
+            git push origin data-results
             echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
 

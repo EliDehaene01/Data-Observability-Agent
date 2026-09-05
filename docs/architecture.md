@@ -323,13 +323,14 @@ workflow's **last** step reads that output and does `exit 1` when
 The ordering matters and is deliberate:
 
 ```
-classify → (Confluence model docs) → commit results to main → dashboard → ENFORCE
+classify → (Confluence model docs) → commit results to data-results → dashboard → ENFORCE
 ```
 
 The audit trail is committed *before* the enforcing step fails the job. A
 blocked PR, or one that's later abandoned, still leaves a full history in
 `results_store/` and on the dashboard — the same principle as "both workflows
-commit straight to `main`". Failing the check must never cost the audit row.
+commit straight to `data-results`" (§8 explains why it's that branch and not
+`main`). Failing the check must never cost the audit row.
 
 ### Why a job exit code, not a Commit Status API call
 
@@ -476,21 +477,69 @@ fine with `NULL` in the new columns.
 reconciliation output or agent state. It goes through the `ReportingConnector`
 interface (`generate_report(output_path)`), whose one MVP implementation
 (`html_dashboard.py`) produces a static HTML page published to GitHub Pages by
-`.github/workflows/publish_dashboard.yml` (triggered on push to `main`,
+`.github/workflows/publish_dashboard.yml` (triggered on push to `data-results`,
 path-filtered to `results_store/results.duckdb`). Swapping in Power BI or
 Metabase later means a new `ReportingConnector` class and nothing else — the
 store and the reconciliation engine don't move.
 
-Both trigger workflows commit their results straight to `main` regardless of
+Both trigger workflows commit their results to `data-results` regardless of
 which branch triggered them, so a PR that never merges still leaves an audit
 trail.
+
+### Why `data-results` and not `main`
+
+`main` is a required-status-check-protected branch (branch protection,
+§5a) — PRs plus a review, no direct pushes. That protection was added *for*
+`dbt-change-check`, but it broke the bot's own `results_store/results.duckdb`
+commits: `GH006: Protected branch update failed`. The fix isn't to weaken
+`main`'s protection; it's to recognize that `results_store/results.duckdb`
+is CI-generated data, not human-reviewed source, and doesn't belong under
+the same protection as the code — so it moved to its own dedicated branch,
+`data-results`, which is deliberately left unprotected so the bot can keep
+pushing to it directly.
+
+Mechanically, each workflow run:
+
+1. **Pulls the existing history first** — `git fetch origin data-results`,
+   then (if the branch exists) `git show origin/data-results:results_store/results.duckdb`
+   into the local working copy — *before* running the reconciliation/agent
+   script, so the append-only inserts land on top of the real history
+   rather than an empty file. If the branch doesn't exist yet (first run
+   ever), it starts a fresh store.
+2. Runs the check as before; the script appends its new rows to that local
+   file exactly as it always has — this step doesn't know or care which
+   branch the file will end up on.
+3. **Commits and pushes to `data-results`**, not the branch that triggered
+   the workflow: copies the updated file aside, checks out (or creates, via
+   `--orphan`) `data-results`, copies the file back in, commits, and
+   pushes. Same shape as the pre-existing "reset onto the target branch,
+   overlay the file, commit" pattern both workflows already used for
+   pushing straight to `main`.
+
+`publish_dashboard.yml` and `scripts/export_results_for_powerbi.py` both
+need the *code* from `main` (dashboard/export logic, connectors) but the
+*data* from `data-results` — so both explicitly check out/fetch `main` and
+then separately pull `results_store/results.duckdb` via `git show
+origin/data-results:results_store/results.duckdb`, rather than assuming
+whatever's in their own checkout is current. `main` itself no longer
+tracks `results_store/results.duckdb` (`.gitignore`) — there'd be nothing
+current to read there even if they didn't.
+
+`publish_dashboard.yml`'s `on: push: branches: [data-results]` trigger is,
+like the old `main` one it replaced, mostly vestigial: a `GITHUB_TOKEN`
+push never fires another workflow's `on: push` (GitHub's anti-loop
+protection), which is exactly why both trigger workflows also explicitly
+`gh workflow run publish_dashboard.yml` right after they push. The push
+trigger only matters for a human manually pushing to `data-results`.
 
 ### The Power BI companion (local, manual)
 
 Alongside the automated HTML dashboard there's a **local Power BI Project**
 (`powerbi/`, PBIP + TMDL — all text, committed). `scripts/export_results_for_powerbi.py`
-reads the results store through the same `results_store.reader` path the
-dashboard uses and writes two CSVs (`reconciliation_results.csv`,
+fetches the current `results_store/results.duckdb` from `origin/data-results`
+(same reasoning as `publish_dashboard.yml` above — a local `main` checkout
+never has an up-to-date copy), reads it through the same `results_store.reader`
+path the dashboard uses, and writes two CSVs (`reconciliation_results.csv`,
 `classification_history.csv`, gitignored); the TMDL semantic model imports
 those and defines the measures (`Flag Rate %`, the classification counts,
 `Average Confidence`, `Runs by Environment`, `PR-Honesty Override Fire
@@ -590,7 +639,8 @@ baked in (`.dockerignore` enforces this).
 
 `scripts/run_data_load_check.py` and `run_code_change_check.py` stay as the
 GitHub-specific entrypoints — they read `PR_BASE_SHA`/`PR_HEAD_SHA`, post the PR
-summary comment, and push the updated results store back to `main`.
+summary comment, and push the updated results store back to the dedicated
+`data-results` branch (§8) rather than `main`.
 `run_check.py` shares the same reconciliation and agent code underneath; the
 checks themselves behave identically. `code-change` defaults to
 reconciliation + classification only, and takes `--run-actions` to also fire the

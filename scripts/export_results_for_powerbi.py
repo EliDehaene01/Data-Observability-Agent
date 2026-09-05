@@ -3,6 +3,13 @@
 this reads only from results_store -- no reconciliation/agent logic here
 (CLAUDE.md dashboard boundary rule).
 
+results_store/results.duckdb is no longer tracked on main -- both trigger
+workflows commit it to the dedicated data-results branch instead (see
+README.md / docs/architecture.md §8), since main now requires PRs + a
+review. So this script always pulls the latest copy from
+origin/data-results via git rather than reading whatever (stale, usually
+absent) copy sits in the local main checkout.
+
 Writes two files into powerbi/data/ (gitignored -- regenerated data):
 
   reconciliation_results.csv   one row per ReconciliationResult (the flat
@@ -17,15 +24,51 @@ Usage: python scripts/export_results_for_powerbi.py [output_dir]
 from __future__ import annotations
 
 import csv
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from results_store.reader import get_all_results
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "powerbi" / "data"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "powerbi" / "data"
+
+
+def _fetch_results_db_from_data_results() -> Path:
+    """Pull the current results_store/results.duckdb out of the
+    data-results branch into a local temp file and return its path, without
+    touching the caller's working tree/branch."""
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", "data-results"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = subprocess.run(
+            ["git", "show", "origin/data-results:results_store/results.duckdb"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(errors="replace")
+        raise SystemExit(
+            "Could not read results_store/results.duckdb from origin/data-results "
+            "-- has on_data_load.yml or on_dbt_change.yml run at least once yet? "
+            f"({stderr.strip()})"
+        ) from exc
+
+    tmp = tempfile.NamedTemporaryFile(prefix="results-", suffix=".duckdb", delete=False)
+    tmp.write(result.stdout)
+    tmp.close()
+    return Path(tmp.name)
+
 
 _RESULT_COLUMNS = [
     "run_id",
@@ -116,7 +159,11 @@ def main() -> None:
     output_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = get_all_results()
+    db_path = _fetch_results_db_from_data_results()
+    try:
+        rows = get_all_results(db_path=db_path)
+    finally:
+        db_path.unlink(missing_ok=True)
     history = _classification_history(rows)
 
     results_path = output_dir / "reconciliation_results.csv"
