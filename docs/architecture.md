@@ -18,7 +18,7 @@ A raw reconciliation job flags both identically: *target diverges from source by
 PR's stated intent — a reasoning task. This system splits the deterministic
 measurement from that reasoning, and only spends an LLM call on the second half.
 
-It's a portfolio project: built vendor-agnostic and cheap (local DuckDB/Postgres,
+built vendor-agnostic and cheap (local DuckDB/Postgres,
 GitHub Actions free tier, free-tier Confluence/Jira/Slack). Real SAP and real
 cloud infra are designed-for swap-ins, not built here.
 
