@@ -8,7 +8,7 @@ automated Confluence / Jira / Slack follow-up. On a dbt PR it also blocks the
 merge when the classification isn't a clean `expected`, and refreshes per-model
 Confluence documentation for every changed model.
 
-> Portfolio project. Built vendor-agnostic and cheap: local DuckDB / Postgres,
+> Built vendor-agnostic and cheap: local DuckDB / Postgres,
 > GitHub Actions free tier, free-tier Confluence / Jira / Slack. Real SAP and
 > cloud infra are designed-for swap-ins, not built here.
 
@@ -77,23 +77,6 @@ When a PR touches `dbt_project/models/**`, `on_dbt_change.yml`:
 4. **Publishes reconciliation reports as nested pages.** An `expected`
    classification publishes its Confluence write-up as a child page under a
    **"Reconciliation Updates"** parent — not a flat top-level page.
-
-### Branch protection (repo owner, one-time manual step)
-
-The blocking behavior above only actually *prevents* a merge once the check is
-marked **required**. Claude Code can't change repo settings, so the repo owner
-must do this by hand:
-
-> **Settings → Branches → Branch protection rules → `main` → Require status
-> checks to pass before merging →** add **`dbt-change-check`**.
-
-Protecting `main` this way is also *why* `results_store/results.duckdb` no
-longer lives there — see [the `data-results` branch](#the-data-results-branch)
-above. Don't add branch protection to `data-results` itself; it needs to
-stay pushable by the bot.
-
-Until that's set, the job still runs and still goes red on a blocking
-classification — it just won't stop a merge.
 
 ### Manual trigger (no PR needed)
 
