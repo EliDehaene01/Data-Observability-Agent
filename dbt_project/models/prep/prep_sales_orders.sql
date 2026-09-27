@@ -8,7 +8,7 @@ with headers as (
     from {{ ref('landing_vbak') }}
     -- Business rule 1: cancelled orders are excluded entirely. They must
     -- never appear in this model or in anything built on top of it.
-    where status != 'cancelled'
+    where status != 'cancelled' and status != 'in_process'
 
 ),
 
