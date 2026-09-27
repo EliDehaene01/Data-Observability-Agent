@@ -211,8 +211,11 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   Historical `data_load` rows before 2026-09-27 labeled
   `vbap -> prep_sales_orders`/`serve_sales_orders` were computed against the
   unfiltered source and flagged every run. That was the intentional
-  cancelled-order exclusion, not a real incident, and later runs use the
-  corrected, differently-labeled checks (see `reconciliation/` above).
+  cancelled-order exclusion, not a real incident. Those rows were archived to
+  `results_store/archive/pre-fix-2026-09-27.csv` (on `main`) and the live
+  store was reset to empty (`scripts/archive_and_reset_results.py`, a
+  one-off). Don't treat the archive as current state, and don't re-run the
+  reset as routine: the store is append-only.
   The dashboard reads from here; it never queries reconciliation output or
   agent state directly. **The `results_store/results.duckdb` file itself
   lives on the dedicated `data-results` branch, not `main`** — `main`
