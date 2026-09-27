@@ -9,7 +9,17 @@ on:
     # arbitrary non-zero minute to avoid the top-of-hour scheduling crunch
     # GitHub Actions warns about.
     - cron: "17 3 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    # Manual runs can pick which environment's config/environments.yml
+    # thresholds to apply. The cron trigger has no inputs, so it falls back
+    # to dev (see the reconciliation step's TARGET_ENVIRONMENT below).
+    inputs:
+      environment:
+        description: "Target environment (thresholds)"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, qa, prd]
 
 # Serialize runs so two concurrent jobs can't both try to push a commit
 # against the same base ref -- queue rather than cancel, since a data-load
@@ -88,6 +98,9 @@ jobs:
           fi
 
       - name: Run reconciliation and append to results_store
+        env:
+          # inputs.environment is empty on the schedule trigger -> dev.
+          TARGET_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: uv run python scripts/run_data_load_check.py
 
       - name: Commit and push updated results_store to data-results

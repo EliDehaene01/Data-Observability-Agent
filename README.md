@@ -80,6 +80,11 @@ When a PR touches `dbt_project/models/**`, `on_dbt_change.yml`:
 
 ### Manual trigger (no PR needed)
 
+`on_data_load.yml` can be run by hand too: **Actions → "Scheduled data-load
+validation" → Run workflow →** pick an `environment` (dev/qa/prd) to apply that
+environment's thresholds. The nightly schedule always uses `dev`. Unlike the
+code-change manual run, this one *does* append its results to `data-results`.
+
 `on_dbt_change.yml` also has a `workflow_dispatch` trigger for testing the whole
 path without opening a PR:
 

@@ -235,7 +235,8 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   class of MVP limitation as `post_slack_notification` being notify-only.
 - `agent/` — LangGraph reasoning layer only.
 - `config/` — environment thresholds/rules as YAML, secrets loading via `.env`.
-- `.github/workflows/` — three entry points: `on_data_load.yml` (schedule),
+- `.github/workflows/` — three entry points: `on_data_load.yml` (schedule on
+  `dev`, plus a `workflow_dispatch` with an `environment` dropdown),
   `on_dbt_change.yml` (PR-triggered, plus a `workflow_dispatch` manual
   fallback) — both write to `results_store/` after running, straight to the
   dedicated `data-results` branch regardless of which branch triggered them
