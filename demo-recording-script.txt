@@ -1,0 +1,137 @@
+DEMO RECORDING SCRIPT — Data Observability Agent
+==================================================
+
+RECORD IN THIS EXACT ORDER.
+
+
+1. DATA-LOAD SEGMENT (run BEFORE Scenario A is merged)
+-----------------------------------------------------------
+- Actions tab -> on_data_load.yml -> Run workflow -> let it complete on screen.
+- Show it clean, 0 flagged.
+- Show the dashboard updating.
+
+NARRATE:
+"This is the scheduled check that runs every night after the data load.
+It's purely deterministic - no AI reasoning here - just comparing row
+counts and sums between the source system and what dbt built."
+
+
+2. SCENARIO A — "Expected" (MERGE this one)
+-----------------------------------------------------------
+File to edit: dbt_project/models/prep/prep_sales_orders.sql
+
+Change this line:
+    where status != 'cancelled'
+To:
+    where status != 'cancelled' and status != 'in_process'
+
+Branch name: demo-scenario-a
+
+PR title:
+    Exclude in_process orders from revenue reporting
+
+PR description:
+    Excludes in_process orders from prep_sales_orders in addition to
+    cancelled ones, per finance's request to only count fully completed
+    orders in revenue reporting.
+
+What to show on camera:
+- The check running
+- The real Confluence page it creates
+- The dashboard reflecting "expected"
+- MERGE the PR
+
+NARRATE:
+"This is a real, honest business logic change. The description matches
+what the code actually does, so the agent classifies it as expected and
+auto-publishes documentation to Confluence - no human needed. This also
+becomes the new normal going forward - in_process orders are now
+permanently excluded from revenue reporting."
+
+
+3. SCENARIO B — "Needs review" (self-contained, leave open)
+-----------------------------------------------------------
+File to edit: dbt_project/models/prep/prep_sales_orders.sql
+(new branch off latest main, after Scenario A is merged)
+
+Make TWO changes in this same PR:
+  1. A real, new business rule change:
+       where status != 'cancelled' and status != 'in_process'
+     becomes:
+       where status != 'cancelled' and status != 'in_process' and status != 'incomplete'
+  2. A harmless cosmetic comment added anywhere else in the file.
+
+Branch name: demo-scenario-b
+
+PR title:
+    Code cleanup
+
+PR description:
+    Minor formatting cleanup, no behavior change.
+
+What to show on camera:
+- The check running
+- The real Slack message
+- The dashboard reflecting "needs_review"
+- Leave the PR OPEN (do not merge)
+
+NARRATE:
+"This PR actually excludes a new category of orders - incomplete ones -
+but the description claims it's just cosmetic cleanup. The agent checks
+the real numbers, sees a genuine discrepancy the description doesn't
+account for, and refuses to trust the description at face value. Instead
+of auto-approving, it routes this to a human for review."
+
+
+4. SCENARIO C — "Anomaly" (relies on Scenario A already being merged, leave open)
+-----------------------------------------------------------
+File to edit: dbt_project/models/landing/landing_vbak.sql
+(new branch off main - do NOT include Scenario B's changes here)
+
+Change: add a harmless comment only - no functional change.
+
+Branch name: demo-scenario-c
+
+PR title:
+    Add clarifying comment to landing model
+
+PR description:
+    Adding a comment for clarity, no functional change.
+
+What to show on camera:
+- The check running
+- The real Jira ticket
+- The red X blocked status check on the PR
+- The dashboard reflecting "anomaly"
+- Leave the PR OPEN (do not merge)
+
+NARRATE:
+"This PR is completely unrelated to the table where the real discrepancy
+is - the one Scenario A created by excluding in_process orders. There's
+nothing in this diff that explains why the numbers don't match. Since
+nobody's change accounts for it, the agent flags it as an anomaly, opens
+a Jira ticket, and blocks the PR from merging until a human looks at it."
+
+
+CLOSING LINE FOR THE PRESENTATION
+-----------------------------------------------------------
+"One thing I'd improve next: today, the reconciliation checker has its
+own separate, hand-maintained list of which exclusions are expected. When
+a rule like Scenario A's changes in the real dbt code, that list has to
+be updated by hand to match - otherwise the checker starts flagging a
+gap it doesn't recognize yet. The next improvement is deriving that list
+automatically from the dbt models themselves, so it can never silently
+drift out of sync."
+
+
+GENERAL NOTES
+-----------------------------------------------------------
+- To edit a file via GitHub web UI: open the file -> click the pencil
+  (edit) icon top-right -> make the change -> scroll down -> select
+  "Create a new branch for this commit and start a pull request" ->
+  name the branch -> "Propose changes" -> fill in PR title/description ->
+  "Create pull request".
+- Watch runs under the PR's "Checks" tab or the repo's "Actions" tab.
+- Order matters: Scenario A MUST be merged before recording Scenario C.
+  Scenario B does not depend on A being merged, but recording it after A
+  (as scripted) keeps the story flowing naturally.
