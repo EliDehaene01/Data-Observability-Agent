@@ -9,12 +9,11 @@ record with a differing value: this module reports what it finds and
 leaves interpretation to the configured threshold and, later, agent/'s
 classification.
 
-With apply_business_rule_filters=True (the data-load trigger), source rows
-are sampled only from the population prep_sales_orders is supposed to
-contain -- aggregate_checks.PREP_SOURCE_FILTERS, i.e. excluding cancelled
-orders -- so a sampled cancelled-order item no longer counts as a
-"missing" mismatch. See aggregate_checks.py's module docstring for why the
-data-load and code-change triggers differ here.
+Source rows are sampled only from the population prep_sales_orders is
+supposed to contain -- aggregate_checks.PREP_SOURCE_FILTERS, i.e. excluding
+cancelled orders -- so a sampled cancelled-order item doesn't count as a
+"missing" mismatch. Same population on both triggers; see
+aggregate_checks.py's module docstring.
 
 One ReconciliationResult is produced per table pair: source_value is the
 number of records sampled, target_value is the number that matched, and
@@ -41,7 +40,7 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "environments.yml"
 # source column name to its target column name when the target renames it
 # (e.g. serve_sales_orders's business-friendly names) -- None means the
 # names are identical on both sides. prep_rules marks pairs whose target
-# applies prep_sales_orders's row filter (see apply_business_rule_filters).
+# applies prep_sales_orders's row filter (PREP_SOURCE_FILTERS).
 TABLE_PAIRS = [
     {
         "source_table": "vbap",
@@ -143,13 +142,12 @@ def run_sample_checks(
     target: TargetConnector,
     environment: str,
     n: int = 50,
-    apply_business_rule_filters: bool = False,
 ) -> list[ReconciliationResult]:
     """Sample checks for every pair in TABLE_PAIRS."""
     results = []
     for pair in TABLE_PAIRS:
         pair = dict(pair)
-        filtered = pair.pop("prep_rules") and apply_business_rule_filters
+        filtered = pair.pop("prep_rules")
         results.append(
             run_sample_check(
                 source,

@@ -185,26 +185,31 @@ Reconciliation: 9 results, 0 flagged.
 Wrote run_id=... to results_store (0 flagged).
 ```
 
-(The data-load check compares prep/serve against the source *minus cancelled
-orders*, the population prep is supposed to contain, and landing against the
-raw source. A healthy run is therefore ~0% everywhere. See `architecture.md` §1.
-The code-change path below still compares against the unfiltered source, so its
-~17% cancelled-order divergence is what `classify_discrepancy` gets to reason
-about.)
+(Both checks compare prep/serve against the source *minus cancelled orders*,
+the population prep is supposed to contain, and landing against the raw source.
+A healthy run is therefore ~0% everywhere. See `architecture.md` §1.)
 
 Then run the LLM path against the bundled example PR (needs `ANTHROPIC_API_KEY`
-in your shell or a local `.env`):
+in your shell or a local `.env`). The example diff adds a new rule that excludes
+`in_process` orders from `prep_sales_orders`. The check reconciles the warehouse
+the container builds from the models, so apply the diff and rebuild the image
+first. Otherwise there's no change to find, and the run correctly reports
+nothing to classify.
 
 ```bash
+git apply examples/sample_sql_diff.txt && docker compose build
 docker compose run --rm agent code-change \
   --sql-diff-file examples/sample_sql_diff.txt \
   --pr-description-file examples/sample_pr_description.txt
+git apply -R examples/sample_sql_diff.txt   # undo afterwards
 ```
 
-Expected tail:
+Expected tail (the ~23% is the in-process share of non-cancelled order items):
 
 ```
-classify_discrepancy: final=expected confidence=0.80 downgraded=False (llm raw=expected)
+  [FLAG] aggregate vbap (excl. cancelled) -> prep_sales_orders row_count            diff_pct=23.35 threshold=5.00
+  ...
+classify_discrepancy: final=expected confidence=0.9x downgraded=False (llm raw=expected)
 Wrote run_id=... to results_store.
 ```
 

@@ -128,7 +128,12 @@ applied in order:
    discrepancy) AND a reconciliation result actually exceeded its
    threshold, force `needs_review` regardless of the LLM's raw
    classification or confidence — this can even override a raw
-   `anomaly`. The `diff_touched_tables` condition matters: a genuinely
+   `anomaly`. `diff_touched_tables` (`agent/nodes/analyze_diff.py`) is
+   built from **flagged** results only: a passing check can't be part of
+   the discrepancy, so a diff that merely touches its table (e.g. a
+   comment in `landing_vbak.sql` beside the passing landing check) must
+   not count. Building it from all results was a real regression, caught
+   by a live PR run. The `diff_touched_tables` condition matters: a genuinely
    no-op change (e.g. a comment) on a table unrelated to the divergence
    correctly earns `pr_claims_no_impact=True` too, but that's irrelevant
    information, not PR dishonesty — without this guard the override
@@ -178,20 +183,21 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
     run and are what actually catch a data-load failure (partial load,
     duplicated rows, connector bug).
   - **Prep/serve checks** (aggregate + sample, `vbap → prep_sales_orders /
-    serve_sales_orders`). On the **data-load trigger only**
-    (`apply_business_rule_filters=True`), the *source* side is filtered to
-    the population prep is supposed to contain (`PREP_SOURCE_FILTERS` in
-    `aggregate_checks.py`: items whose `vbak` header isn't `cancelled`,
-    mirroring `prep_sales_orders.sql`'s only row filter, since
-    `incomplete`/`in_process` are kept). Without it, prep's intentional
-    cancelled-order exclusion is a permanent ~17% divergence that flagged
-    every scheduled run and would have hidden a real problem underneath.
-    Filtered rows are labeled `vbap (excl. cancelled) -> …`. The
-    **code-change trigger stays unfiltered** on purpose: the full divergence
-    is the evidence `classify_discrepancy` weighs against the SQL diff. If
-    prep's row filter changes, `PREP_SOURCE_FILTERS` must change with it.
-    This is a declared population, not interpretation, so it doesn't
-    violate the no-reasoning rule above.
+    serve_sales_orders`). On **both triggers**, the *source* side is
+    filtered to the population prep is supposed to contain
+    (`PREP_SOURCE_FILTERS` in `aggregate_checks.py`: items whose `vbak`
+    header isn't `cancelled`, mirroring main's `prep_sales_orders.sql` row
+    filter, since `incomplete`/`in_process` are kept). Without it, prep's
+    intentional cancelled-order exclusion is a permanent ~17% divergence.
+    It flagged every scheduled run, and it made *every* PR (even a comment
+    change) inherit a gap it didn't cause, so unrelated PRs got classified
+    `anomaly` and blocked. With it, a healthy data-load run is ~0%, and a
+    PR only sees the divergence it introduces (e.g. adding an `in_process`
+    exclusion shows ~23%, exactly that subset). Filtered rows are labeled
+    `vbap (excl. cancelled) -> …`. If prep's row filter changes on main,
+    `PREP_SOURCE_FILTERS` must change with it in the same PR. This is a
+    declared population, not interpretation, so it doesn't violate the
+    no-reasoning rule above.
 - `model_docs/` — per-model documentation pipeline. `manifest.py` reads dbt's
   `manifest.json` + `catalog.json` (deterministic; lineage + columns/types) and
   parses the changed-models list out of a unified diff; `render.py` builds
@@ -208,7 +214,7 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   added after the schema already had real rows in it; `writer.py`'s
   `ALTER TABLE ADD COLUMN IF NOT EXISTS` keeps that backward-compatible, so
   don't reintroduce a hard schema requirement that breaks reading old rows.
-  Historical `data_load` rows before 2026-09-27 labeled
+  Historical rows before 2026-09-27 labeled
   `vbap -> prep_sales_orders`/`serve_sales_orders` were computed against the
   unfiltered source and flagged every run. That was the intentional
   cancelled-order exclusion, not a real incident. Those rows were archived to

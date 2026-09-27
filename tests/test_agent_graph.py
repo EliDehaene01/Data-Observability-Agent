@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent.nodes.analyze_diff import analyze_diff
 from agent.nodes.classify_discrepancy import classify_discrepancy
 from agent.state import AgentState
 from reconciliation.models import ReconciliationResult, ReconciliationRun
@@ -28,10 +29,12 @@ DEV_THRESHOLD = 0.6
 
 
 @pytest.fixture(autouse=True)
-def _fake_api_key(monkeypatch):
+def _fake_api_key(request, monkeypatch):
     # classify_discrepancy reads this before anthropic.Anthropic is even
     # constructed, so it must be set even though the client itself is mocked.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+    # @pytest.mark.live tests call the real API and need the real key.
+    if request.node.get_closest_marker("live") is None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
 
 
 def _make_state(
@@ -171,6 +174,77 @@ def test_override_does_not_fire_when_pr_is_honest():
     state = _make_state(diff_touched_tables=["prep_sales_orders"])
     result = _mock_llm(state, "expected", 0.95, pr_claims_no_impact=False)
     assert result["final_classification"] == "expected"
+    assert result["downgraded"] is False
+
+
+# -- analyze_diff: only FLAGGED results count ---------------------------------
+# Regression: once every run carried the passing vbak -> landing_vbak check,
+# a comment-only diff to landing_vbak.sql made diff_touched_tables non-empty
+# and let the PR-honesty override fire on an unrelated discrepancy.
+
+_LANDING_COMMENT_DIFF = """
+--- a/dbt_project/models/landing/landing_vbak.sql
++++ b/dbt_project/models/landing/landing_vbak.sql
+@@ -1,3 +1,4 @@
++-- clarify VBELN meaning
+ select
+"""
+
+
+def _run_with(*results_spec):
+    now = datetime.now(timezone.utc)
+    return ReconciliationRun(
+        environment="dev",
+        run_timestamp=now,
+        trigger_type="code_change",
+        results=[
+            ReconciliationResult(
+                check_type="aggregate", table=table, metric="row_count",
+                source_value=100.0, target_value=100.0 - diff_pct, diff_pct=diff_pct,
+                threshold=5.0, status="flag" if diff_pct > 5.0 else "pass",
+                environment="dev", run_timestamp=now,
+            )
+            for table, diff_pct in results_spec
+        ],
+    )
+
+
+def test_analyze_diff_ignores_tables_of_passing_checks():
+    state = AgentState(
+        reconciliation_run=_run_with(
+            ("vbak -> landing_vbak", 0.0),
+            ("vbap (excl. cancelled) -> serve_sales_orders", 12.0),
+        ),
+        sql_diff=_LANDING_COMMENT_DIFF,
+        pr_description="Comment only, no behavior change.",
+    )
+    assert analyze_diff(state)["diff_touched_tables"] == []
+
+
+def test_analyze_diff_reads_table_name_out_of_filtered_label():
+    state = AgentState(
+        reconciliation_run=_run_with(("vbap (excl. cancelled) -> prep_sales_orders", 23.0)),
+        sql_diff="--- a/dbt_project/models/prep/prep_sales_orders.sql\n+    and status != 'in_process'",
+        pr_description="",
+    )
+    assert analyze_diff(state)["diff_touched_tables"] == ["prep_sales_orders"]
+
+
+def test_unrelated_comment_pr_is_not_overridden_end_to_end():
+    """analyze_diff -> classify_discrepancy on the regression case: the LLM
+    says anomaly + pr_claims_no_impact, but the diff touches only a passing
+    check's table, so the override must NOT convert it to needs_review."""
+    state = AgentState(
+        reconciliation_run=_run_with(
+            ("vbak -> landing_vbak", 0.0),
+            ("vbap (excl. cancelled) -> serve_sales_orders", 12.0),
+        ),
+        sql_diff=_LANDING_COMMENT_DIFF,
+        pr_description="Comment only, no behavior change.",
+    )
+    state.diff_touched_tables = analyze_diff(state)["diff_touched_tables"]
+    result = _mock_llm(state, "anomaly", 0.9, pr_claims_no_impact=True)
+    assert result["final_classification"] == "anomaly"
     assert result["downgraded"] is False
 
 

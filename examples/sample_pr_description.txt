@@ -1,6 +1,7 @@
-Exclude cancelled orders from prep_sales_orders
+Exclude in_process orders from prep_sales_orders
 
-Finance asked us to stop counting cancelled orders in sales reporting.
-Cancelled orders are ~17% of order volume in the current data, so
+Ops asked us to stop counting orders that are still being fulfilled in
+sales reporting until they complete (business rule 3). In-process orders
+are roughly a fifth of non-cancelled order volume in the current data, so
 row_count and net_value totals in prep_sales_orders / serve_sales_orders
 will drop by roughly that much. This is expected and intended.

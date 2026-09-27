@@ -21,22 +21,25 @@ of pair, answering two different questions:
    structural divergence from raw vbap. Compared against the unfiltered
    source, these checks exceed every environment's threshold on every run,
    so they carry no signal and would hide a real problem underneath the
-   permanent noise. With apply_business_rule_filters=True the source side
-   is filtered to the population prep is *supposed* to contain
-   (PREP_SOURCE_FILTERS), so the comparison is apples-to-apples and ~0% on
-   a healthy run -- anything left over is unexpected.
+   permanent noise. So the source side is always filtered to the population
+   prep is *supposed* to contain (PREP_SOURCE_FILTERS), making the
+   comparison apples-to-apples: ~0% on a healthy run, and anything left
+   over is unexpected.
 
-   The data-load trigger (business logic hasn't changed) always sets it.
-   The code-change trigger leaves it off: there the full source-vs-target
-   divergence is exactly what classify_discrepancy reasons over against the
-   SQL diff, so it must not be pre-filtered away. Filtered pairs get a
-   distinct table label so the two never mix in results_store.
+   Both triggers use the same filtered population. On data-load that
+   isolates real load problems; on code-change it means a PR only sees the
+   divergence *it* introduces (e.g. a new exclusion rule in prep) rather
+   than the permanent cancelled-order gap every PR used to inherit, which
+   made unrelated PRs look like anomalies. Filtered pairs carry the label
+   "vbap (excl. cancelled) -> ..."; agent/nodes/analyze_diff.py reads the
+   table name back out of it.
 
-Historical note: data_load runs in results_store written before 2026-09-27
-compared prep/serve against the *unfiltered* source (label
-"vbap -> prep_sales_orders" with trigger_type="data_load") and flagged on
-every run. Those flags reflect the intentional cancelled-order exclusion,
-not a real ongoing problem; runs from this fix on use the corrected logic.
+Historical note: runs written before 2026-09-27 compared prep/serve against
+the *unfiltered* source (label "vbap -> prep_sales_orders") and flagged on
+every run -- data_load runs until the data-load fix, code_change runs until
+this filter was extended to them. Those flags reflect the intentional
+cancelled-order exclusion, not a real ongoing problem. The pre-fix history
+is archived in results_store/archive/pre-fix-2026-09-27.csv.
 """
 
 from __future__ import annotations
@@ -55,9 +58,10 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "environments.yml"
 # Source-side mirror of prep_sales_orders.sql's row filter: vbap items whose
 # vbak header is not cancelled. Only business rule 1 excludes rows --
 # rule 2 (incomplete orders) flags but keeps them, and in_process/completed
-# orders are kept as-is. This deliberately duplicates the dbt rule: if
-# prep's filter changes, update this too, or data-load runs will (rightly)
-# start flagging the mismatch.
+# orders are kept as-is. This deliberately duplicates the dbt rule on
+# main: a PR that changes prep's filter will (rightly) flag the difference
+# for classify_discrepancy, and once merged this must be updated to match,
+# or every later run flags it too.
 PREP_SOURCE_FILTERS: Filters = {
     "order_id": ("in", Lookup("vbak", "order_id", {"status": ("!=", "cancelled")})),
 }
@@ -120,18 +124,16 @@ def run_aggregate_checks(
     source: SourceConnector,
     target: TargetConnector,
     environment: str,
-    apply_business_rule_filters: bool = False,
 ) -> list[ReconciliationResult]:
     """Row-count and sum(net_value) checks for every pair in TABLE_PAIRS,
-    thresholded against config/environments.yml[environment]. See the
-    module docstring for when to set apply_business_rule_filters."""
+    thresholded against config/environments.yml[environment]."""
     thresholds = _load_thresholds(environment)
     run_timestamp = datetime.now(timezone.utc)
     results: list[ReconciliationResult] = []
 
     for pair in TABLE_PAIRS:
         source_table, target_table = pair["source_table"], pair["target_table"]
-        filtered = pair["prep_rules"] and apply_business_rule_filters
+        filtered = pair["prep_rules"]
         source_filters = PREP_SOURCE_FILTERS if filtered else None
         source_label = PREP_SOURCE_LABEL if filtered else source_table
         table_label = f"{source_label} -> {target_table}"

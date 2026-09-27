@@ -3,6 +3,12 @@
 #   docker compose up --build          # seeds Postgres, builds the dbt
 #                                      # warehouse, runs the data-load check
 #
+# The example diff must actually be applied to the models first -- the
+# code-change check reconciles the warehouse built from them, so an
+# unapplied diff correctly finds nothing to classify:
+#
+#   git apply examples/sample_sql_diff.txt && docker compose build
+#
 #   docker compose run --rm agent code-change \
 #       --sql-diff-file examples/sample_sql_diff.txt \
 #       --pr-description-file examples/sample_pr_description.txt
