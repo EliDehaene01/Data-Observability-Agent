@@ -393,8 +393,11 @@ scripts:
 - read `SYNTHETIC_SQL_DIFF` / `SYNTHETIC_PR_DESCRIPTION` directly instead of
   `git diff`-ing a PR range,
 - log the would-be PR comment instead of posting it (there's no PR),
-- **skip** the results-store commit to `main` (a synthetic test must not
-  pollute the real audit trail or dashboard).
+- **skip** the results-store commit to `data-results` and the dashboard
+  republish by default (a synthetic test must not pollute the real audit trail
+  or dashboard). Tick the `record_results` input to opt a manual run in; its
+  rows are ordinary `code_change` rows, indistinguishable from a real PR's.
+  Real `pull_request` runs always record, whatever the input says.
 
 The blocking-policy step still runs, so a manual run with a
 `needs_review`/`anomaly` scenario still goes red — which is how you test the
