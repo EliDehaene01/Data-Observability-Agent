@@ -78,6 +78,10 @@ uv run pytest --run-live -m live
   from the same connectors under test (see
   `test_cancelled_order_divergence_matches_expected_magnitude` for the
   pattern), so the tests don't silently rot if the seed data changes.
+- To prove a check still detects a real failure, corrupt the warehouse
+  with the `corrupted_target` fixture in `test_reconciliation.py`. It applies
+  SQL inside a transaction on the session target and rolls it back
+  afterwards. A file copy doesn't work: Windows locks the open DuckDB file.
 - `reconciliation/` and `connectors/` tests must never call an LLM (see
   CLAUDE.md) -- if a test in those files needs mocking to avoid a real
   call, that's a sign the logic being tested has drifted into the wrong

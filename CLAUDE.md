@@ -171,7 +171,27 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   the MVP implementation is a static HTML dashboard published via GitHub Pages, but
   the interface should allow swapping in something else (e.g. Power BI, Metabase)
   later without touching the results store or reconciliation engine.
-- `reconciliation/` — deterministic engine only.
+- `reconciliation/` — deterministic engine only. Two kinds of check, answering
+  different questions:
+  - **Landing checks** (`vbak → landing_vbak`, `vbap → landing_vbap`), never
+    filtered. Landing is a 1:1 pass-through, so these sit at ~0% on a healthy
+    run and are what actually catch a data-load failure (partial load,
+    duplicated rows, connector bug).
+  - **Prep/serve checks** (aggregate + sample, `vbap → prep_sales_orders /
+    serve_sales_orders`). On the **data-load trigger only**
+    (`apply_business_rule_filters=True`), the *source* side is filtered to
+    the population prep is supposed to contain (`PREP_SOURCE_FILTERS` in
+    `aggregate_checks.py`: items whose `vbak` header isn't `cancelled`,
+    mirroring `prep_sales_orders.sql`'s only row filter, since
+    `incomplete`/`in_process` are kept). Without it, prep's intentional
+    cancelled-order exclusion is a permanent ~17% divergence that flagged
+    every scheduled run and would have hidden a real problem underneath.
+    Filtered rows are labeled `vbap (excl. cancelled) -> …`. The
+    **code-change trigger stays unfiltered** on purpose: the full divergence
+    is the evidence `classify_discrepancy` weighs against the SQL diff. If
+    prep's row filter changes, `PREP_SOURCE_FILTERS` must change with it.
+    This is a declared population, not interpretation, so it doesn't
+    violate the no-reasoning rule above.
 - `model_docs/` — per-model documentation pipeline. `manifest.py` reads dbt's
   `manifest.json` + `catalog.json` (deterministic; lineage + columns/types) and
   parses the changed-models list out of a unified diff; `render.py` builds
@@ -188,6 +208,11 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   added after the schema already had real rows in it; `writer.py`'s
   `ALTER TABLE ADD COLUMN IF NOT EXISTS` keeps that backward-compatible, so
   don't reintroduce a hard schema requirement that breaks reading old rows.
+  Historical `data_load` rows before 2026-09-27 labeled
+  `vbap -> prep_sales_orders`/`serve_sales_orders` were computed against the
+  unfiltered source and flagged every run. That was the intentional
+  cancelled-order exclusion, not a real incident, and later runs use the
+  corrected, differently-labeled checks (see `reconciliation/` above).
   The dashboard reads from here; it never queries reconciliation output or
   agent state directly. **The `results_store/results.duckdb` file itself
   lives on the dedicated `data-results` branch, not `main`** — `main`

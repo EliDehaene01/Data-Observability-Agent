@@ -97,3 +97,30 @@ def test_valid_agg_funcs_and_operators_still_work(postgres_source):
     everything real callers use."""
     assert postgres_source.get_aggregate("vbap", "quantity", "avg") > 0
     assert postgres_source.get_row_count("vbak", filters={"order_id": (">=", 0)}) > 0
+
+
+# -- Lookup (semi-join) filters ----------------------------------------------
+
+
+def test_lookup_filter_matches_between_engines(postgres_source, duckdb_target):
+    """("in", Lookup(...)) filters vbap items by their vbak header's status
+    -- same count on both engines, and consistent with the unfiltered total."""
+    from connectors.source.base import Lookup as SourceLookup
+    from connectors.target.base import Lookup as TargetLookup
+
+    not_cancelled = {"status": ("!=", "cancelled")}
+    source_count = postgres_source.get_row_count(
+        "vbap", filters={"order_id": ("in", SourceLookup("vbak", "order_id", not_cancelled))}
+    )
+    target_count = duckdb_target.get_row_count(
+        "landing_vbap", filters={"order_id": ("in", TargetLookup("landing_vbak", "order_id", not_cancelled))}
+    )
+    assert source_count == target_count
+    assert 0 < source_count < postgres_source.get_row_count("vbap")
+
+
+def test_lookup_operator_rejects_non_lookup_operand(postgres_source, duckdb_target):
+    with pytest.raises(ValueError):
+        postgres_source.get_row_count("vbap", filters={"order_id": ("in", "(select 1); drop table vbap; --")})
+    with pytest.raises(ValueError):
+        duckdb_target.get_row_count("landing_vbap", filters={"order_id": ("in", [1, 2, 3])})

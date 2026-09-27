@@ -13,10 +13,28 @@ from typing import Any, Union
 SUPPORTED_AGG_FUNCS = frozenset({"sum", "avg", "count", "min", "max"})
 COMPARISON_OPERATORS = frozenset({"=", "!=", ">", ">=", "<", "<="})
 
-# A filter value is either a scalar (implies "=") or an (operator, value) pair,
-# e.g. {"status": "completed", "order_date": (">=", date(2026, 1, 1))}.
+# Semi-join operator: {"order_id": ("in", Lookup("vbak", "order_id", {...}))}
+# keeps only rows whose order_id appears in vbak's rows matching {...}. Its
+# operand must be a Lookup -- never a raw SQL string.
+LOOKUP_OPERATOR = "in"
+
+# A filter value is either a scalar (implies "="), an (operator, value) pair,
+# e.g. {"status": "completed", "order_date": (">=", date(2026, 1, 1))}, or
+# an ("in", Lookup(...)) semi-join.
 FilterValue = Union[Any, tuple[str, Any]]
 Filters = dict[str, FilterValue]
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """The set of `column` values in `table`'s rows matching `filters` --
+    the operand of an ("in", ...) filter. Lets a caller filter one table by
+    a column that only exists on a related table (e.g. vbap items by their
+    vbak header's status) without the connector's SQL leaking upward."""
+
+    table: str
+    column: str
+    filters: "Filters | None" = None
 
 
 @dataclass(frozen=True)

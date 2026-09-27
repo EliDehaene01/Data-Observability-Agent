@@ -4,19 +4,39 @@ is static). No LLM code belongs in this file (see CLAUDE.md); it only ever
 compares numbers and applies thresholds pulled from
 config/environments.yml.
 
-Source side queries `vbap` directly via SourceConnector (Postgres). This is
-deliberately not `landing_vbap`: landing_vbap is dbt's 1:1, no-filtering
-copy of vbap (see dbt_project/models/landing/landing_vbak.sql), so
-querying the real source table gives the same numbers without routing a
-"source-side" check through the target warehouse.
+Source side queries the raw vbak/vbap tables via SourceConnector (Postgres);
+target side queries the dbt models via TargetConnector (DuckDB). Two kinds
+of pair, answering two different questions:
 
-Target side queries prep_sales_orders and serve_sales_orders via
-TargetConnector (DuckDB). Both intentionally exclude cancelled orders (see
-dbt_project/models/prep/prep_sales_orders.sql) -- so these row counts and
-sums are *expected* to diverge from the source. This module does not special
--case that: it reports the diff_pct like any other check and lets the
-configured threshold (and, later, agent/'s classification) decide what it
-means.
+1. Landing checks (vbak -> landing_vbak, vbap -> landing_vbap), never
+   filtered. landing/ is defined as a faithful 1:1 pass-through of the
+   source (see dbt_project/models/landing/), so these should sit at ~0% on
+   every healthy run. They are the checks that catch a genuine data-load
+   problem -- a failed or partial load, duplicated rows, a connector bug --
+   because no business rule can explain a landing-layer divergence.
+
+2. Prep/serve checks (vbap -> prep_sales_orders / serve_sales_orders).
+   prep_sales_orders permanently excludes cancelled orders (business rule 1
+   in dbt_project/models/prep/prep_sales_orders.sql), a fixed ~17%
+   structural divergence from raw vbap. Compared against the unfiltered
+   source, these checks exceed every environment's threshold on every run,
+   so they carry no signal and would hide a real problem underneath the
+   permanent noise. With apply_business_rule_filters=True the source side
+   is filtered to the population prep is *supposed* to contain
+   (PREP_SOURCE_FILTERS), so the comparison is apples-to-apples and ~0% on
+   a healthy run -- anything left over is unexpected.
+
+   The data-load trigger (business logic hasn't changed) always sets it.
+   The code-change trigger leaves it off: there the full source-vs-target
+   divergence is exactly what classify_discrepancy reasons over against the
+   SQL diff, so it must not be pre-filtered away. Filtered pairs get a
+   distinct table label so the two never mix in results_store.
+
+Historical note: data_load runs in results_store written before 2026-09-27
+compared prep/serve against the *unfiltered* source (label
+"vbap -> prep_sales_orders" with trigger_type="data_load") and flagged on
+every run. Those flags reflect the intentional cancelled-order exclusion,
+not a real ongoing problem; runs from this fix on use the corrected logic.
 """
 
 from __future__ import annotations
@@ -26,18 +46,33 @@ from pathlib import Path
 
 import yaml
 
-from connectors.source.base import SourceConnector
+from connectors.source.base import Filters, Lookup, SourceConnector
 from connectors.target.base import TargetConnector
 from reconciliation.models import ReconciliationResult
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "environments.yml"
 
-# (source_table, target_table) pairs to compare. Column names match exactly
-# across all three (vbap, prep_sales_orders, serve_sales_orders never
-# renames net_value), so no column mapping is needed here.
+# Source-side mirror of prep_sales_orders.sql's row filter: vbap items whose
+# vbak header is not cancelled. Only business rule 1 excludes rows --
+# rule 2 (incomplete orders) flags but keeps them, and in_process/completed
+# orders are kept as-is. This deliberately duplicates the dbt rule: if
+# prep's filter changes, update this too, or data-load runs will (rightly)
+# start flagging the mismatch.
+PREP_SOURCE_FILTERS: Filters = {
+    "order_id": ("in", Lookup("vbak", "order_id", {"status": ("!=", "cancelled")})),
+}
+PREP_SOURCE_LABEL = "vbap (excl. cancelled)"
+
+# Each entry: compare source_table (optionally filtered to the population
+# the target is expected to contain) against target_table. sum_column is
+# None when the table has no net_value to sum (vbak is headers only).
+# Column names match exactly across vbap, landing_vbap, prep_sales_orders
+# and serve_sales_orders (none renames net_value), so no mapping is needed.
 TABLE_PAIRS = [
-    ("vbap", "prep_sales_orders"),
-    ("vbap", "serve_sales_orders"),
+    {"source_table": "vbak", "target_table": "landing_vbak", "sum_column": None, "prep_rules": False},
+    {"source_table": "vbap", "target_table": "landing_vbap", "sum_column": "net_value", "prep_rules": False},
+    {"source_table": "vbap", "target_table": "prep_sales_orders", "sum_column": "net_value", "prep_rules": True},
+    {"source_table": "vbap", "target_table": "serve_sales_orders", "sum_column": "net_value", "prep_rules": True},
 ]
 
 
@@ -85,17 +120,23 @@ def run_aggregate_checks(
     source: SourceConnector,
     target: TargetConnector,
     environment: str,
+    apply_business_rule_filters: bool = False,
 ) -> list[ReconciliationResult]:
     """Row-count and sum(net_value) checks for every pair in TABLE_PAIRS,
-    thresholded against config/environments.yml[environment]."""
+    thresholded against config/environments.yml[environment]. See the
+    module docstring for when to set apply_business_rule_filters."""
     thresholds = _load_thresholds(environment)
     run_timestamp = datetime.now(timezone.utc)
     results: list[ReconciliationResult] = []
 
-    for source_table, target_table in TABLE_PAIRS:
-        table_label = f"{source_table} -> {target_table}"
+    for pair in TABLE_PAIRS:
+        source_table, target_table = pair["source_table"], pair["target_table"]
+        filtered = pair["prep_rules"] and apply_business_rule_filters
+        source_filters = PREP_SOURCE_FILTERS if filtered else None
+        source_label = PREP_SOURCE_LABEL if filtered else source_table
+        table_label = f"{source_label} -> {target_table}"
 
-        source_count = float(source.get_row_count(source_table))
+        source_count = float(source.get_row_count(source_table, filters=source_filters))
         target_count = float(target.get_row_count(target_table))
         results.append(
             _build_result(
@@ -110,8 +151,10 @@ def run_aggregate_checks(
             )
         )
 
-        source_sum = source.get_aggregate(source_table, "net_value", "sum")
-        target_sum = target.get_aggregate(target_table, "net_value", "sum")
+        if pair["sum_column"] is None:
+            continue
+        source_sum = source.get_aggregate(source_table, pair["sum_column"], "sum", filters=source_filters)
+        target_sum = target.get_aggregate(target_table, pair["sum_column"], "sum")
         results.append(
             _build_result(
                 "aggregate",
