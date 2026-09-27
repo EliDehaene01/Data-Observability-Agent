@@ -28,8 +28,16 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "environments.yml"
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
+# strict: the API guarantees tool_use.input matches input_schema exactly.
+# Without it, the model occasionally dropped pr_claims_no_impact and wrote
+# its value into the end of `reasoning` instead ("... false"), so
+# ClassificationResult validation failed and the PR check errored. Strict
+# mode needs additionalProperties: false and doesn't support numeric
+# minimum/maximum -- the 0-1 range is stated in the description and still
+# enforced client-side by ClassificationResult's Field(ge=0.0, le=1.0).
 _CLASSIFY_TOOL = {
     "name": "classify_discrepancy",
+    "strict": True,
     "description": (
         "Classify a data-observability reconciliation discrepancy between a "
         "source ERP table and a dbt-transformed target table."
@@ -52,10 +60,8 @@ _CLASSIFY_TOOL = {
             },
             "confidence": {
                 "type": "number",
-                "minimum": 0,
-                "maximum": 1,
                 "description": (
-                    "Confidence in the chosen classification, grounded in "
+                    "Confidence in the chosen classification, between 0 and 1, grounded in "
                     "whether the SQL diff itself corroborates the direction "
                     "and magnitude of the discrepancy -- not how plausible "
                     "the PR description sounds on its own. A PR description "
@@ -87,6 +93,7 @@ _CLASSIFY_TOOL = {
             },
         },
         "required": ["classification", "confidence", "reasoning", "pr_claims_no_impact"],
+        "additionalProperties": False,
     },
 }
 
