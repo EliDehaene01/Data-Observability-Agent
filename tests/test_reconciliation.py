@@ -135,3 +135,93 @@ def test_serve_sales_orders_matches_prep_sales_orders_divergence(postgres_source
         r for r in results if r.table == "vbap -> serve_sales_orders" and r.metric == "row_count"
     )
     assert prep_result.diff_pct == serve_result.diff_pct
+
+
+# -- Business-rule filtering (data-load trigger) ------------------------------
+# With apply_business_rule_filters=True, prep/serve are compared against the
+# source population they're supposed to contain (cancelled orders
+# excluded), and the unfiltered landing checks guard the load itself. See
+# reconciliation/aggregate_checks.py's module docstring.
+
+
+def test_landing_checks_show_no_divergence_on_healthy_run(postgres_source, duckdb_target):
+    results = run_aggregate_checks(postgres_source, duckdb_target, "prd")
+    landing = [r for r in results if "landing_" in r.table]
+    assert {r.table for r in landing} == {"vbak -> landing_vbak", "vbap -> landing_vbap"}
+    assert all(r.diff_pct == 0 and r.status == "pass" for r in landing)
+
+
+def test_business_rule_filter_removes_cancelled_order_noise(postgres_source, duckdb_target):
+    """Healthy data: every check passes even at prd's 0.5%/1% thresholds."""
+    results = run_aggregate_checks(
+        postgres_source, duckdb_target, "prd", apply_business_rule_filters=True
+    ) + run_sample_checks(postgres_source, duckdb_target, "prd", n=50, apply_business_rule_filters=True)
+
+    assert all(r.status == "pass" for r in results), [r for r in results if r.status == "flag"]
+    assert all(r.diff_pct == 0 for r in results)
+    prep_tables = {r.table for r in results if "landing_" not in r.table}
+    assert prep_tables == {
+        "vbap (excl. cancelled) -> prep_sales_orders",
+        "vbap (excl. cancelled) -> serve_sales_orders",
+    }
+
+
+@pytest.fixture
+def corrupted_target(duckdb_target):
+    """Yields a function that applies the given SQL to the session's
+    warehouse inside a transaction and returns the (now corrupted) target
+    -- a simulated data-load failure. Rolled back afterwards, so the
+    shared healthy target is untouched for every other test. (A file copy
+    isn't an option: Windows locks the open DuckDB file, and the loaded
+    vbak/vbap carry FK constraints that COPY FROM DATABASE trips over.)"""
+
+    def _corrupt(*statements: str):
+        duckdb_target._conn.execute("begin transaction")
+        for sql in statements:
+            duckdb_target._conn.execute(sql)
+        return duckdb_target
+
+    yield _corrupt
+    duckdb_target._conn.execute("rollback")
+
+
+def _flagged_tables(results):
+    return {(r.table, r.metric) for r in results if r.status == "flag"}
+
+
+def test_filtered_checks_still_catch_a_partial_load(postgres_source, corrupted_target):
+    """~10% of non-cancelled order items never arrived in the warehouse.
+    landing/prep are views over the loaded vbap, so both must flag."""
+    target = corrupted_target("delete from vbap where order_id % 10 = 0")
+    flagged = _flagged_tables(
+        run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+    )
+    assert ("vbap -> landing_vbap", "row_count") in flagged
+    assert ("vbap -> landing_vbap", "sum_net_value") in flagged
+    assert ("vbap (excl. cancelled) -> prep_sales_orders", "row_count") in flagged
+
+
+def test_filtered_checks_still_catch_duplicated_rows(postgres_source, corrupted_target):
+    # vbap has a (order_id, item_id) primary key, so the "duplicates" are
+    # re-inserted under shifted item_ids -- the same rows loaded twice.
+    target = corrupted_target(
+        "insert into vbap select order_id, item_id + 100000, material_id, quantity, net_value "
+        "from vbap where order_id % 5 = 0"
+    )
+    flagged = _flagged_tables(
+        run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+    )
+    assert ("vbap -> landing_vbap", "row_count") in flagged
+    assert ("vbap (excl. cancelled) -> prep_sales_orders", "row_count") in flagged
+
+
+def test_filtered_checks_still_catch_serve_layer_row_loss(postgres_source, corrupted_target):
+    """serve_sales_orders is a materialized table: rows lost there alone
+    (landing and prep intact) must flag serve and only serve."""
+    target = corrupted_target("delete from serve_sales_orders where sales_order_id % 4 = 0")
+    results = run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+    flagged = _flagged_tables(results)
+    assert flagged == {
+        ("vbap (excl. cancelled) -> serve_sales_orders", "row_count"),
+        ("vbap (excl. cancelled) -> serve_sales_orders", "sum_net_value"),
+    }

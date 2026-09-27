@@ -11,9 +11,11 @@ import duckdb
 
 from connectors.target.base import (
     COMPARISON_OPERATORS,
+    LOOKUP_OPERATOR,
     SUPPORTED_AGG_FUNCS,
     ColumnInfo,
     Filters,
+    Lookup,
     TargetConnector,
 )
 
@@ -39,6 +41,16 @@ class DuckDBTargetConnector(TargetConnector):
         params: list[Any] = []
         for column, value in filters.items():
             operator, operand = value if isinstance(value, tuple) else ("=", value)
+            if operator == LOOKUP_OPERATOR:
+                if not isinstance(operand, Lookup):
+                    raise ValueError(f"{LOOKUP_OPERATOR!r} filter needs a Lookup operand, got {operand!r}")
+                sub_where, sub_params = self._build_where(operand.filters)
+                clauses.append(
+                    f"{self._quote_ident(column)} in (select {self._quote_ident(operand.column)} "
+                    f"from {self._quote_ident(operand.table)}{sub_where})"
+                )
+                params.extend(sub_params)
+                continue
             if operator not in COMPARISON_OPERATORS:
                 raise ValueError(f"Unsupported filter operator: {operator!r}")
             clauses.append(f"{self._quote_ident(column)} {operator} ?")

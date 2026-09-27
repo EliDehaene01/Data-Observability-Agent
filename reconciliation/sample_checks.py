@@ -4,12 +4,17 @@ belongs in this file (see CLAUDE.md).
 
 A sampled record counts as a match only if the target has a corresponding
 row (matched by key_columns) AND every compare_columns value is equal. A
-record whose target row is missing entirely (e.g. because its order was
-cancelled and dbt's prep_sales_orders excludes it -- see
-dbt_project/models/prep/prep_sales_orders.sql) counts as a mismatch, same
-as a record with a differing value: this module reports what it finds and
+record whose target row is missing entirely counts as a mismatch, same as a
+record with a differing value: this module reports what it finds and
 leaves interpretation to the configured threshold and, later, agent/'s
 classification.
+
+With apply_business_rule_filters=True (the data-load trigger), source rows
+are sampled only from the population prep_sales_orders is supposed to
+contain -- aggregate_checks.PREP_SOURCE_FILTERS, i.e. excluding cancelled
+orders -- so a sampled cancelled-order item no longer counts as a
+"missing" mismatch. See aggregate_checks.py's module docstring for why the
+data-load and code-change triggers differ here.
 
 One ReconciliationResult is produced per table pair: source_value is the
 number of records sampled, target_value is the number that matched, and
@@ -24,8 +29,9 @@ from pathlib import Path
 
 import yaml
 
-from connectors.source.base import SourceConnector
+from connectors.source.base import Filters, SourceConnector
 from connectors.target.base import TargetConnector
+from reconciliation.aggregate_checks import PREP_SOURCE_FILTERS, PREP_SOURCE_LABEL
 from reconciliation.models import ReconciliationResult
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "environments.yml"
@@ -34,7 +40,8 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "environments.yml"
 # key_columns, and compare compare_columns. column_mapping translates a
 # source column name to its target column name when the target renames it
 # (e.g. serve_sales_orders's business-friendly names) -- None means the
-# names are identical on both sides.
+# names are identical on both sides. prep_rules marks pairs whose target
+# applies prep_sales_orders's row filter (see apply_business_rule_filters).
 TABLE_PAIRS = [
     {
         "source_table": "vbap",
@@ -42,6 +49,7 @@ TABLE_PAIRS = [
         "key_columns": ["order_id", "item_id"],
         "compare_columns": ["material_id", "quantity", "net_value"],
         "column_mapping": None,
+        "prep_rules": True,
     },
     {
         "source_table": "vbap",
@@ -53,6 +61,7 @@ TABLE_PAIRS = [
             "item_id": "line_item_number",
             "material_id": "product_id",
         },
+        "prep_rules": True,
     },
 ]
 
@@ -82,13 +91,16 @@ def run_sample_check(
     environment: str,
     n: int = 50,
     column_mapping: dict[str, str] | None = None,
+    source_filters: Filters | None = None,
+    source_label: str | None = None,
 ) -> ReconciliationResult:
-    """Sample `n` rows from source_table, match each into target_table by
-    key_columns, and compare compare_columns for equality."""
+    """Sample `n` rows from source_table (restricted to source_filters, if
+    given), match each into target_table by key_columns, and compare
+    compare_columns for equality."""
     thresholds = _load_thresholds(environment)
     run_timestamp = datetime.now(timezone.utc)
 
-    sampled_rows = source.sample_rows(source_table, n)
+    sampled_rows = source.sample_rows(source_table, n, filters=source_filters)
     n_matched = 0
 
     for source_row in sampled_rows:
@@ -114,7 +126,7 @@ def run_sample_check(
 
     return ReconciliationResult(
         check_type="sample",
-        table=f"{source_table} -> {target_table}",
+        table=f"{source_label or source_table} -> {target_table}",
         metric="sample_mismatch_pct",
         source_value=source_value,
         target_value=target_value,
@@ -131,9 +143,22 @@ def run_sample_checks(
     target: TargetConnector,
     environment: str,
     n: int = 50,
+    apply_business_rule_filters: bool = False,
 ) -> list[ReconciliationResult]:
     """Sample checks for every pair in TABLE_PAIRS."""
-    return [
-        run_sample_check(source, target, environment=environment, n=n, **pair)
-        for pair in TABLE_PAIRS
-    ]
+    results = []
+    for pair in TABLE_PAIRS:
+        pair = dict(pair)
+        filtered = pair.pop("prep_rules") and apply_business_rule_filters
+        results.append(
+            run_sample_check(
+                source,
+                target,
+                environment=environment,
+                n=n,
+                source_filters=PREP_SOURCE_FILTERS if filtered else None,
+                source_label=PREP_SOURCE_LABEL if filtered else None,
+                **pair,
+            )
+        )
+    return results

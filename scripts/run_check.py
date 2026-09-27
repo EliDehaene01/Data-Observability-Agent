@@ -79,10 +79,14 @@ def _prepare_target(seed: bool, build: bool) -> None:
 def _reconcile(environment: str, trigger_type: str) -> ReconciliationRun:
     source = PostgresSourceConnector()
     target = DuckDBTargetConnector()
+    # Data-load runs compare prep/serve against the source population they're
+    # supposed to contain; code-change runs keep the full divergence for
+    # classify_discrepancy -- see reconciliation/aggregate_checks.py.
+    filtered = trigger_type == "data_load"
     try:
-        results = run_aggregate_checks(source, target, environment) + run_sample_checks(
-            source, target, environment
-        )
+        results = run_aggregate_checks(
+            source, target, environment, apply_business_rule_filters=filtered
+        ) + run_sample_checks(source, target, environment, apply_business_rule_filters=filtered)
     finally:
         source.close()
         target.close()

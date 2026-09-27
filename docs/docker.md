@@ -177,15 +177,20 @@ docker compose up --build
 Expected tail:
 
 ```
-Reconciliation: 6 results, 6 flagged.
-  [FLAG] aggregate vbap -> prep_sales_orders      row_count            diff_pct=17.26 threshold=5.00
-  [FLAG] aggregate vbap -> prep_sales_orders      sum_net_value        diff_pct=17.44 threshold=5.00
+Reconciliation: 9 results, 0 flagged.
+  [pass] aggregate vbak -> landing_vbak           row_count            diff_pct=0.00 threshold=5.00
+  [pass] aggregate vbap -> landing_vbap           row_count            diff_pct=0.00 threshold=5.00
+  [pass] aggregate vbap (excl. cancelled) -> prep_sales_orders row_count            diff_pct=0.00 threshold=5.00
   ...
-Wrote run_id=... to results_store (6 flagged).
+Wrote run_id=... to results_store (0 flagged).
 ```
 
-(The ~17% divergence is the intended cancelled-order exclusion in
-`prep_sales_orders` — see `architecture.md`.)
+(The data-load check compares prep/serve against the source *minus cancelled
+orders*, the population prep is supposed to contain, and landing against the
+raw source. A healthy run is therefore ~0% everywhere. See `architecture.md` §1.
+The code-change path below still compares against the unfiltered source, so its
+~17% cancelled-order divergence is what `classify_discrepancy` gets to reason
+about.)
 
 Then run the LLM path against the bundled example PR (needs `ANTHROPIC_API_KEY`
 in your shell or a local `.env`):

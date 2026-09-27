@@ -41,6 +41,39 @@ numbers reconcile or they don't.
 
 Entry point: `.github/workflows/on_data_load.yml` → `scripts/run_data_load_check.py`.
 
+#### What the data-load check compares, and why
+
+"Either the numbers reconcile or they don't" only holds if the two sides are
+*supposed* to match. `prep_sales_orders` permanently excludes cancelled orders
+(business rule 1), so raw `vbap` against `prep_sales_orders` is a fixed ~17%
+structural divergence, not an anomaly. Before 2026-09-27 the data-load check
+compared exactly that, so it flagged 6/6 results on every scheduled run. A
+check that always fires carries no signal, and a real load failure hidden
+under the permanent 17% would go unnoticed. The check now runs two kinds of
+comparison, each answering one question:
+
+| Check | Source side | Healthy result | Catches |
+|---|---|---|---|
+| **Landing** — `vbak → landing_vbak`, `vbap → landing_vbap` | Raw source, **no filter** | ~0% | Failed/partial load, duplicated rows, connector or cast bugs. Landing is a 1:1 pass-through, so *any* divergence is a bug. |
+| **Prep/serve** — `vbap (excl. cancelled) → prep_sales_orders / serve_sales_orders` (aggregate + sample) | Raw `vbap` **filtered to the population prep keeps**: items whose `vbak` header isn't cancelled | ~0% | Rows lost or duplicated between landing and prep/serve, a stale `serve` table, prep dropping rows it shouldn't. |
+
+The source-side filter (`PREP_SOURCE_FILTERS` in
+`reconciliation/aggregate_checks.py`) mirrors prep's row filter exactly: only
+`status = 'cancelled'` removes rows. `incomplete` orders are flagged but kept,
+and `in_process` orders are kept. It is a declared *population*, not
+interpretation. The check still just compares two numbers, over a population
+chosen so that "equal" is the correct expectation. It deliberately
+duplicates the dbt rule, so if prep's filter changes, `PREP_SOURCE_FILTERS`
+has to change with it. Until it does, data-load runs will flag the mismatch,
+which is the correct outcome.
+
+Only the data-load trigger applies the filter (`apply_business_rule_filters=True`).
+The code-change trigger compares against the **unfiltered** source on purpose:
+there, the full divergence is the evidence `classify_discrepancy` weighs
+against the SQL diff, and pre-filtering it away would leave nothing to classify.
+Filtered checks carry a distinct `table` label (`vbap (excl. cancelled) -> …`),
+so the two populations never share a time series in `results_store`.
+
 ### Code-change validation — PR-triggered, reasoning
 
 Runs when a dbt model changes (PR / deploy). Here the business logic *did* change,
@@ -77,10 +110,12 @@ The split above is enforced structurally, not by convention:
 | `connectors/` | **No.** | `base.py` interface first; concrete drivers behind it. |
 
 `reconciliation/aggregate_checks.py` and `sample_checks.py` compare numbers and
-apply a threshold. That's the whole job. They don't special-case the known
-cancelled-order divergence, even though they "know" it's coming — they report
-`diff_pct` like any other check and let the threshold (and later the agent)
-decide what it means. If a piece of logic in here wants to *interpret* a result,
+apply a threshold. That's the whole job. The one piece of business knowledge
+they hold is `PREP_SOURCE_FILTERS`, a static declaration of which source rows
+prep is supposed to contain, applied on the data-load trigger only (see §1).
+It chooses *what* to compare, never *what a difference means*. The checks
+report `diff_pct` like any other check and let the threshold (and, on the
+code-change path, the agent) decide what it means. If a piece of logic in here wants to *interpret* a result,
 that's the signal it belongs in `agent/` instead.
 
 `agent/` only ever reads `ReconciliationResult` objects. It never re-queries a
@@ -186,8 +221,11 @@ stable titles (so a re-run of the same PR revises the same page). A non-tree
 a filter operator into SQL as a raw string. Both are checked against frozen
 whitelists in `base.py` (`SUPPORTED_AGG_FUNCS = {sum, avg, count, min, max}`,
 `COMPARISON_OPERATORS = {=, !=, >, >=, <, <=}`); anything else raises `ValueError`
-before a query is built. Filter *values* go through the driver's parameter
-binding. Identifiers are quoted. `tests/test_connectors.py` fires
+before a query is built. The one other operator, `"in"`, only accepts a
+`Lookup(table, column, filters)` dataclass operand (a semi-join such as "vbap
+items whose vbak header isn't cancelled"), which is built from quoted
+identifiers plus recursively bound filters, never from a raw string. Filter
+*values* go through the driver's parameter binding. Identifiers are quoted. `tests/test_connectors.py` fires
 `"; drop table vbap; --"` at both engines and asserts the rejection.
 
 ---
@@ -202,10 +240,10 @@ it means:
 - **`models/landing/`** — `landing_vbak`, `landing_vbap`. 1:1 with source.
   Cleaned and typed only: no filtering, no business logic. **Any** divergence
   from source here is a bug, full stop — there's no design decision that could
-  explain it. (This is also why `reconciliation/` queries the raw `vbap` source
-  table directly rather than `landing_vbap`: they're defined to be identical, so
-  hitting the real source avoids routing a "source-side" number through the
-  warehouse.)
+  explain it. That's what the unfiltered landing checks
+  (`vbak → landing_vbak`, `vbap → landing_vbap`) rely on: they should sit at ~0%
+  on every healthy run, and they are the checks that catch a real data-load
+  failure (§1).
 
 - **`models/prep/`** — `prep_sales_orders`. **Where business logic lives.**
   Intentional source-to-target divergence is introduced here and commented:
@@ -473,6 +511,15 @@ classifies anything. Those four were added *after* the table already had rows;
 `writer.py` uses `ALTER TABLE ADD COLUMN IF NOT EXISTS` so old rows keep reading
 fine with `NULL` in the new columns.
 
+**Historical `data_load` flags predate the 2026-09-27 reconciliation fix.**
+Every `trigger_type="data_load"` row before that date labeled
+`vbap -> prep_sales_orders` / `vbap -> serve_sales_orders` was computed against
+the *unfiltered* source (§1) and flagged on every run. Those flags reflect the
+intentional cancelled-order exclusion, not a real ongoing problem. From the fix
+on, data-load runs write `vbap (excl. cancelled) -> …` and
+`vbak/vbap -> landing_*` rows instead, so the old and corrected series are
+distinguishable by label alone. The store is append-only, so the old rows stay.
+
 **The dashboard only ever reads from the results store** — never from live
 reconciliation output or agent state. It goes through the `ReportingConnector`
 interface (`generate_report(output_path)`), whose one MVP implementation
@@ -573,7 +620,11 @@ usage in [`powerbi.md`](powerbi.md).
   at the boundary, the cancelled-order divergence magnitude tracks the actual
   cancelled-order rate in the seed data (computed independently, not hardcoded),
   connector method shapes match across both engines, and the injection whitelist
-  rejects garbage.
+  rejects garbage. For the data-load filtering (§1), they assert that landing
+  and filtered prep/serve checks all sit at 0% on healthy data, even at prd's
+  thresholds, and that simulated failures still get flagged in the right layer:
+  a partial load, duplicated rows, and rows lost from `serve` only. Each
+  failure is applied inside a rolled-back transaction on the test warehouse.
 - **`test_agent_graph.py`** — `classify_discrepancy`'s decision logic with the
   Anthropic call **mocked** by default. Covers every branch of Rules 1 and 2,
   including the `diff_touched_tables` edge case.
