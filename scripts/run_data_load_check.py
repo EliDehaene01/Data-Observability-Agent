@@ -6,10 +6,15 @@ Runs both check types against POSTGRES_CONNECTION_STRING (source) and
 DUCKDB_PATH (target, built by `dbt run` immediately before this script),
 wraps the results in a ReconciliationRun (trigger_type="data_load"), and
 appends it to results_store via write_run.
+
+The environment (which config/environments.yml thresholds apply) comes from
+TARGET_ENVIRONMENT: the workflow_dispatch dropdown on manual runs, "dev" on
+the nightly schedule and whenever it's unset.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,10 +28,11 @@ from reconciliation.models import ReconciliationRun
 from reconciliation.sample_checks import run_sample_checks
 from results_store.writer import write_run
 
-ENVIRONMENT = "dev"
+DEFAULT_ENVIRONMENT = "dev"
 
 
 def main() -> None:
+    environment = os.environ.get("TARGET_ENVIRONMENT") or DEFAULT_ENVIRONMENT
     source = PostgresSourceConnector()
     target = DuckDBTargetConnector()
     try:
@@ -34,14 +40,14 @@ def main() -> None:
         # against the source population they're supposed to contain -- see
         # reconciliation/aggregate_checks.py's module docstring.
         results = run_aggregate_checks(
-            source, target, ENVIRONMENT, apply_business_rule_filters=True
-        ) + run_sample_checks(source, target, ENVIRONMENT, apply_business_rule_filters=True)
+            source, target, environment, apply_business_rule_filters=True
+        ) + run_sample_checks(source, target, environment, apply_business_rule_filters=True)
     finally:
         source.close()
         target.close()
 
     run = ReconciliationRun(
-        environment=ENVIRONMENT,
+        environment=environment,
         run_timestamp=datetime.now(timezone.utc),
         trigger_type="data_load",
         results=results,

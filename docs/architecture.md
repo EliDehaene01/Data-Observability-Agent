@@ -40,6 +40,10 @@ sampled row-level comparisons, each diffed against a per-environment threshold.
 numbers reconcile or they don't.
 
 Entry point: `.github/workflows/on_data_load.yml` → `scripts/run_data_load_check.py`.
+The nightly schedule always runs against `dev`'s thresholds. A manual
+`workflow_dispatch` run picks `dev`/`qa`/`prd` from a dropdown (same pattern as
+`on_dbt_change.yml`), passed to the script as `TARGET_ENVIRONMENT`. Manual runs
+still append to `data-results` like scheduled ones.
 
 #### What the data-load check compares, and why
 
