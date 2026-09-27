@@ -1,3 +1,4 @@
+-- Test comment (record_results PR-path verification; PR will be closed, not merged).
 -- 1:1 with source vbak. Cleaned/typed columns only -- no filtering, no
 -- business logic belongs in this model.
 
