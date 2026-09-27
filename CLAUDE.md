@@ -261,8 +261,11 @@ schema — don't let individual nodes invent their own ad hoc state shapes.
   - The `workflow_dispatch` inputs (`sql_diff`, `pr_description`, `environment`)
     let the whole path run without a real PR. In that mode the scripts read the
     inputs directly, the real PR comment is skipped (logged instead), and the
-    results-store commit to `data-results` is skipped so manual tests don't
-    pollute the audit trail / dashboard.
+    results-store commit to `data-results` (plus the dashboard republish) is
+    skipped by default so manual tests don't pollute the audit trail /
+    dashboard. Ticking the `record_results` input opts a manual run in. The
+    commit step's `if:` is `pull_request || inputs.record_results`, so real
+    PRs always record regardless of the input.
   - The same workflow regenerates per-model Confluence docs (`dbt docs generate`
     → `scripts/generate_model_docs.py`) for every changed model. That step is
     `continue-on-error` — documentation must not block a PR.

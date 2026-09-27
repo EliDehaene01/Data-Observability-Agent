@@ -93,8 +93,9 @@ path without opening a PR:
 > `environment`.
 
 In this mode the scripts use the inputs directly, the real PR comment is skipped
-(logged instead), and the results-store commit to `main` is skipped so the
-manual run doesn't touch the audit trail or dashboard.
+(logged instead), and by default the results-store commit to `data-results` is
+skipped so the manual run doesn't touch the audit trail or dashboard. Tick
+**`record_results`** to record the run and republish the dashboard anyway.
 
 ## Architecture at a glance
 

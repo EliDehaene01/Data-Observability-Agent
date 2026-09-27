@@ -27,7 +27,8 @@ on:
     # real PR. When triggered this way, run_code_change_check.py and
     # generate_model_docs.py use these inputs directly instead of deriving
     # them from a pull_request event, and the PR-comment step is skipped
-    # (the would-be comment is logged instead).
+    # (the would-be comment is logged instead). Results are NOT recorded to
+    # data-results unless record_results is ticked (see the commit step).
     inputs:
       sql_diff:
         description: "Synthetic dbt models SQL diff (unified diff text) to classify"
@@ -43,6 +44,11 @@ on:
         default: dev
         type: choice
         options: [dev, qa, prd]
+      record_results:
+        description: "Record this run in the results store (data-results) and republish the dashboard"
+        required: false
+        default: false
+        type: boolean
 
 # A new push to the PR supersedes any in-flight check for that same PR.
 concurrency:
@@ -191,10 +197,12 @@ jobs:
         # so this bot can't push straight to it any more, and
         # results_store/results.duckdb is CI-generated data rather than
         # human-reviewed source anyway -- see "data-results branch" in
-        # README.md / architecture.md §8. Skipped for workflow_dispatch: a
-        # manual synthetic-diff test run must not write to the real audit
-        # trail / dashboard.
-        if: ${{ always() && github.event_name == 'pull_request' }}
+        # README.md / architecture.md §8. Always runs for a real PR. A
+        # manual workflow_dispatch run is a synthetic-diff test, so it only
+        # writes to the real audit trail / dashboard when explicitly opted
+        # in via the record_results input (inputs.* is empty on
+        # pull_request, so that half can't affect real PRs).
+        if: ${{ always() && (github.event_name == 'pull_request' || inputs.record_results) }}
         run: |
           cp results_store/results.duckdb "$RUNNER_TEMP/results.duckdb"
           rm -f results_store/results.duckdb
