@@ -559,6 +559,13 @@ path-filtered to `results_store/results.duckdb`). Swapping in Power BI or
 Metabase later means a new `ReportingConnector` class and nothing else — the
 store and the reconciliation engine don't move.
 
+Each run in the data-load and code-change history tables links to a
+**drill-down section** (`#run-<run_id>`). It lists every `ReconciliationResult`
+for that run (table, metric, source/target values, `diff_pct`, threshold,
+status), read via `results_store.reader.get_run_by_id`. The page is still
+static and JS-free: the sections are hidden by default and shown by the CSS
+`:target` selector when their anchor is the URL fragment.
+
 Both trigger workflows commit their results to `data-results` regardless of
 which branch triggered them, so a PR that never merges still leaves an audit
 trail.
