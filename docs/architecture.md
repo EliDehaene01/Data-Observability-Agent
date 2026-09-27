@@ -511,14 +511,21 @@ classifies anything. Those four were added *after* the table already had rows;
 `writer.py` uses `ALTER TABLE ADD COLUMN IF NOT EXISTS` so old rows keep reading
 fine with `NULL` in the new columns.
 
-**Historical `data_load` flags predate the 2026-09-27 reconciliation fix.**
-Every `trigger_type="data_load"` row before that date labeled
-`vbap -> prep_sales_orders` / `vbap -> serve_sales_orders` was computed against
-the *unfiltered* source (§1) and flagged on every run. Those flags reflect the
-intentional cancelled-order exclusion, not a real ongoing problem. From the fix
-on, data-load runs write `vbap (excl. cancelled) -> …` and
-`vbak/vbap -> landing_*` rows instead, so the old and corrected series are
-distinguishable by label alone. The store is append-only, so the old rows stay.
+**Archived pre-fix history:
+[`results_store/archive/pre-fix-2026-09-27.csv`](../results_store/archive/pre-fix-2026-09-27.csv).**
+Before the 2026-09-27 aggregate-checks fix (§1), data-load runs compared prep/serve
+against the *unfiltered* source. Prep's intentional cancelled-order exclusion
+made every scheduled run flag 6/6, which was a gap in the comparison, not a
+real ongoing problem. Once the fix landed, those 183 rows (30 runs, including
+one `code_change` run and one post-fix verification run) were exported to that
+CSV, with every column preserved and verified identical on read-back. The live
+store on `data-results` was then reset to an empty `results` table with the same
+schema, so the dashboard starts from the corrected logic.
+
+The archive is kept for the record. It does not reflect current behavior. The
+reset, done by `scripts/archive_and_reset_results.py`, is a one-off exception
+to the append-only rule, and the previous `results.duckdb` also remains in the
+`data-results` git history.
 
 **The dashboard only ever reads from the results store** — never from live
 reconciliation output or agent state. It goes through the `ReportingConnector`
