@@ -1,6 +1,8 @@
 -- 1:1 with source vbak. Cleaned/typed columns only -- no filtering, no
 -- business logic belongs in this model.
 
+-- comment to test out demo scenario c
+
 select
     cast(order_id as integer)   as order_id,
     cast(customer_id as varchar) as customer_id,
