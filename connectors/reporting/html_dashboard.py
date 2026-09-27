@@ -3,6 +3,11 @@ results_store (see connectors/reporting/base.py); never touches live
 reconciliation output or agent state. No build step, no JS framework --
 one self-contained HTML file with embedded CSS, bars drawn with plain
 flexbox divs.
+
+Run drill-down: each run in the history tables links to #run-<run_id>, a
+per-run section listing every ReconciliationResult for that run (read via
+results_store.reader.get_run_by_id). The sections are hidden by default
+and shown with the CSS :target selector, so it stays JS-free.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from connectors.reporting.base import ReportingConnector
-from results_store.reader import get_all_results, get_recent_runs
+from results_store.reader import get_all_results, get_recent_runs, get_run_by_id
 
 _STATUS_LABEL = {"pass": "PASS", "flag": "FLAG"}
 _CLASSIFICATION_CLASS = {
@@ -79,6 +84,20 @@ def _format_timestamp(value: Any) -> str:
         return value.strftime("%Y-%m-%d %H:%M UTC")
     except AttributeError:
         return html.escape(str(value))
+
+
+def _run_anchor(run_id: str) -> str:
+    return f"run-{html.escape(run_id)}"
+
+
+def _render_run_link(run: dict[str, Any]) -> str:
+    return f'<a href="#{_run_anchor(run["run_id"])}">{_format_timestamp(run["run_timestamp"])}</a>'
+
+
+def _format_number(value: Any) -> str:
+    if value is None:
+        return '<span class="muted">&mdash;</span>'
+    return f"{value:,.2f}"
 
 
 def _render_bar(pass_count: int, flag_count: int) -> str:
@@ -161,14 +180,14 @@ def _render_summary_section(
 
 
 def _render_data_load_history(summaries: list[dict[str, Any]]) -> str:
-    rows = [s for s in summaries if s["trigger_type"] == "data_load"][:20]
+    rows = [s for s in summaries if s["trigger_type"] == "data_load"][:_HISTORY_LIMIT]
     if not rows:
         return '<section><h2>Data-load check history</h2><p class="muted">No data-load runs yet.</p></section>'
 
     body_rows = "".join(
         f"""
         <tr>
-            <td>{_format_timestamp(r["run_timestamp"])}</td>
+            <td>{_render_run_link(r)}</td>
             <td>{html.escape(r["environment"])}</td>
             <td>{_render_status_badge(r["overall_status"])}</td>
             <td>{r["flagged_checks"]}/{r["total_checks"]}</td>
@@ -190,7 +209,7 @@ def _render_data_load_history(summaries: list[dict[str, Any]]) -> str:
 
 
 def _render_code_change_history(summaries: list[dict[str, Any]]) -> str:
-    rows = [s for s in summaries if s["trigger_type"] == "code_change"][:20]
+    rows = [s for s in summaries if s["trigger_type"] == "code_change"][:_HISTORY_LIMIT]
     if not rows:
         return '<section><h2>Code-change check history</h2><p class="muted">No code-change runs yet.</p></section>'
 
@@ -203,7 +222,7 @@ def _render_code_change_history(summaries: list[dict[str, Any]]) -> str:
         body_rows.append(
             f"""
             <tr>
-                <td>{_format_timestamp(r["run_timestamp"])}</td>
+                <td>{_render_run_link(r)}</td>
                 <td>{html.escape(r["environment"])}</td>
                 <td>{_render_classification_badge(r["final_classification"])}</td>
                 <td>{confidence_text}</td>
@@ -227,6 +246,63 @@ def _render_code_change_history(summaries: list[dict[str, Any]]) -> str:
         </table>
     </section>
     """
+
+
+def _render_run_detail(run: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    """One run's check-level detail: every ReconciliationResult row for
+    run_id, exactly as stored."""
+    body_rows = "".join(
+        f"""
+        <tr class="{'row-flag' if r['status'] == 'flag' else ''}">
+            <td>{html.escape(r["check_type"])}</td>
+            <td>{html.escape(r["table"])}</td>
+            <td>{html.escape(r["metric"])}</td>
+            <td class="num">{_format_number(r["source_value"])}</td>
+            <td class="num">{_format_number(r["target_value"])}</td>
+            <td class="num">{r["diff_pct"]:.2f}%</td>
+            <td class="num">{r["threshold"]:.2f}%</td>
+            <td>{_render_status_badge(r["status"])}</td>
+        </tr>
+        """
+        for r in results
+    )
+    classification = ""
+    if run["trigger_type"] == "code_change":
+        confidence = run["confidence"]
+        classification = (
+            f"<p>Classification: {_render_classification_badge(run['final_classification'])}"
+            + (f" &middot; confidence {confidence:.2f}" if confidence is not None else "")
+            + (" &middot; downgraded" if run["downgraded"] else "")
+            + "</p>"
+        )
+    trigger_label = "Data-load" if run["trigger_type"] == "data_load" else "Code-change"
+    return f"""
+    <section class="run-detail card" id="{_run_anchor(run["run_id"])}">
+        <h3>{trigger_label} run &middot; {_format_timestamp(run["run_timestamp"])} &middot; {html.escape(run["environment"])}</h3>
+        <p class="muted">run_id <code>{html.escape(run["run_id"])}</code> &middot;
+            {run["flagged_checks"]}/{run["total_checks"]} checks flagged</p>
+        {classification}
+        <table>
+            <thead>
+                <tr>
+                    <th>Check</th><th>Table</th><th>Metric</th><th class="num">Source</th>
+                    <th class="num">Target</th><th class="num">Diff</th><th class="num">Threshold</th><th>Status</th>
+                </tr>
+            </thead>
+            <tbody>{body_rows}</tbody>
+        </table>
+        <p><a href="#history">&larr; Back to history</a></p>
+    </section>
+    """
+
+
+def _render_run_details(runs: list[dict[str, Any]], db_path: str | Path | None) -> str:
+    if not runs:
+        return ""
+    sections = "".join(
+        _render_run_detail(run, get_run_by_id(run["run_id"], db_path=db_path)) for run in runs
+    )
+    return f"<section>{sections}</section>"
 
 
 _CSS = """
@@ -293,24 +369,47 @@ tr:last-child td { border-bottom: none; }
 .bar-flag { background: var(--flag); }
 .summary-counts { width: 140px; text-align: right; white-space: nowrap; }
 footer { color: var(--muted); font-size: 0.8rem; margin-top: 2rem; }
+a { color: var(--accent); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.row-flag td { background: #fef2f2; }
+code { font-size: 0.8rem; }
+/* Drill-down: hidden until its #run-<id> anchor is the URL fragment. */
+.run-detail { display: none; margin-top: 1.5rem; }
+.run-detail:target { display: block; border-color: var(--accent); }
+.run-detail table { margin: 0.5rem 0; }
 """
 
 
+# History tables show at most this many runs per trigger; drill-down
+# sections are rendered for exactly those runs.
+_HISTORY_LIMIT = 20
+
+
 class HtmlDashboardConnector(ReportingConnector):
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        # None = results_store's default path (what CI publishes).
+        self._db_path = db_path
+
     def generate_report(self, output_path: str) -> None:
-        all_rows = get_all_results()
+        all_rows = get_all_results(db_path=self._db_path)
         summaries = _summarize_runs(all_rows)
         counts_by_env = _counts_by_environment(all_rows)
         most_recent_by_trigger = _most_recent_per_trigger(summaries)
         # get_recent_runs isn't strictly needed once we have all_rows, but
         # exercising it here keeps this connector honest that both read
         # functions actually work against the real store.
-        get_recent_runs(limit=1)
+        get_recent_runs(limit=1, db_path=self._db_path)
 
+        shown_runs = [s for s in summaries if s["trigger_type"] == "data_load"][:_HISTORY_LIMIT] + [
+            s for s in summaries if s["trigger_type"] == "code_change"
+        ][:_HISTORY_LIMIT]
         body = (
             _render_summary_section(counts_by_env, most_recent_by_trigger)
+            + '<div id="history">'
             + _render_data_load_history(summaries)
             + _render_code_change_history(summaries)
+            + "</div>"
+            + _render_run_details(shown_runs, self._db_path)
         )
 
         html_doc = f"""<!doctype html>
