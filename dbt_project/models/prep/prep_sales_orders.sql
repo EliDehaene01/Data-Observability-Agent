@@ -1,14 +1,14 @@
 -- Joins landing_vbak + landing_vbap to the order-line grain. This is the
 -- layer where source-to-target divergence is deliberately introduced --
 -- row counts here differ from the source vbak/vbap tables on purpose.
-
+-- A comment to test for this demo
 with headers as (
 
     select *
     from {{ ref('landing_vbak') }}
     -- Business rule 1: cancelled orders are excluded entirely. They must
     -- never appear in this model or in anything built on top of it.
-    where status != 'cancelled' and status != 'in_process'
+    where status != 'cancelled' and status != 'in_process' and status != 'incomplete'
 
 ),
 
