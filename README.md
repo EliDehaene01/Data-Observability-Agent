@@ -140,17 +140,23 @@ docker compose up --build
 ```
 
 This seeds a throwaway Postgres, builds the dbt warehouse, and runs the
-deterministic **data-load** check, printing the reconciliation results (you'll
-see the intended ~17% cancelled-order divergence flagged).
+deterministic **data-load** check, printing the reconciliation results. On
+healthy data every check passes at ~0%, because prep/serve are compared against
+the source population they're supposed to contain.
 
 To exercise the **code-change** path (the LLM classification), set
-`ANTHROPIC_API_KEY` in your shell or a local `.env`, then:
+`ANTHROPIC_API_KEY` in your shell or a local `.env`. First apply the example
+diff: it adds a new business rule to `prep_sales_orders`, and the check
+reconciles the warehouse built from the models, so the change has to be in
+them. Then run:
 
 ```bash
+git apply examples/sample_sql_diff.txt && docker compose build
 docker compose run --rm agent code-change \
   --sql-diff-file examples/sample_sql_diff.txt \
   --pr-description-file examples/sample_pr_description.txt
-# → classify_discrepancy: final=expected confidence=0.80 downgraded=False
+# → ~23% drop flagged in prep/serve → classify_discrepancy: final=expected
+git apply -R examples/sample_sql_diff.txt   # undo afterwards
 ```
 
 Prefer a pre-built image? It's published to GitHub Container Registry on every
@@ -190,7 +196,8 @@ Run the checks via the generic entrypoint (same one the container uses):
 # deterministic data-load reconciliation → appends to the results store
 uv run python scripts/run_check.py data-load
 
-# reconciliation + LLM classification on a dbt diff (needs ANTHROPIC_API_KEY)
+# reconciliation + LLM classification on a dbt diff (needs ANTHROPIC_API_KEY;
+# apply the diff to the models first -- `git apply examples/sample_sql_diff.txt`)
 uv run python scripts/run_check.py code-change \
   --sql-diff-file examples/sample_sql_diff.txt \
   --pr-description-file examples/sample_pr_description.txt

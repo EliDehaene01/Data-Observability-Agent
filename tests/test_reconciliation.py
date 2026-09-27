@@ -3,7 +3,8 @@ deterministic engine only, no LLM, no mocking of the connectors (real
 Postgres/DuckDB, see conftest.py). Covers:
   - thresholds are actually read from config/environments.yml per environment
   - status flips pass -> flag exactly at the threshold boundary
-  - the known cancelled-order divergence produces the expected diff_pct
+  - prep/serve are compared against the filtered source population, and
+    healthy data sits at 0% while simulated load failures still flag
 """
 
 from __future__ import annotations
@@ -94,33 +95,28 @@ def test_status_is_pass_just_under_threshold():
     assert result.status == "pass"
 
 
-# -- Known cancelled-order divergence ---------------------------------------
+# -- Source-side population filter ------------------------------------------
 
 
-def test_cancelled_order_divergence_matches_expected_magnitude(postgres_source, duckdb_target):
-    """prep_sales_orders excludes cancelled orders entirely (see
-    dbt_project/models/prep/prep_sales_orders.sql) -- the resulting
-    row_count divergence should track the actual cancelled-order rate in
-    the source data, computed independently here rather than hardcoded, so
-    this doesn't silently rot if the seed data is regenerated with
-    different volumes."""
-    total_orders = postgres_source.get_row_count("vbak")
-    cancelled_orders = postgres_source.get_row_count("vbak", filters={"status": "cancelled"})
-    assert cancelled_orders > 0, "seed data should include some cancelled orders"
-    expected_order_level_exclusion_pct = cancelled_orders / total_orders * 100
+def test_filtered_source_population_is_vbap_minus_cancelled_order_items(postgres_source, duckdb_target):
+    """PREP_SOURCE_FILTERS must select exactly the vbap items prep keeps:
+    everything except items of cancelled orders. Computed independently
+    (total minus the complementary lookup) rather than hardcoded, so this
+    doesn't rot if the seed data changes."""
+    from connectors.source.base import Lookup
+
+    total_items = postgres_source.get_row_count("vbap")
+    cancelled_items = postgres_source.get_row_count(
+        "vbap", filters={"order_id": ("in", Lookup("vbak", "order_id", {"status": "cancelled"}))}
+    )
+    assert cancelled_items > 0, "seed data should include some cancelled orders"
 
     results = run_aggregate_checks(postgres_source, duckdb_target, "dev")
-    row_count_result = next(
-        r for r in results if r.table == "vbap -> prep_sales_orders" and r.metric == "row_count"
+    prep_row_count = next(
+        r for r in results
+        if r.table == "vbap (excl. cancelled) -> prep_sales_orders" and r.metric == "row_count"
     )
-
-    assert row_count_result.source_value > row_count_result.target_value
-    assert row_count_result.diff_pct > 0
-    # item-level exclusion rate tracks the order-level rate (not exact,
-    # since line-items-per-order varies by status, but should be close).
-    assert row_count_result.diff_pct == pytest.approx(expected_order_level_exclusion_pct, abs=5.0)
-    # this divergence is large relative to every environment's threshold
-    assert row_count_result.status == "flag"
+    assert prep_row_count.source_value == total_items - cancelled_items
 
 
 def test_serve_sales_orders_matches_prep_sales_orders_divergence(postgres_source, duckdb_target):
@@ -129,19 +125,21 @@ def test_serve_sales_orders_matches_prep_sales_orders_divergence(postgres_source
     source should be identical."""
     results = run_aggregate_checks(postgres_source, duckdb_target, "dev")
     prep_result = next(
-        r for r in results if r.table == "vbap -> prep_sales_orders" and r.metric == "row_count"
+        r for r in results
+        if r.table == "vbap (excl. cancelled) -> prep_sales_orders" and r.metric == "row_count"
     )
     serve_result = next(
-        r for r in results if r.table == "vbap -> serve_sales_orders" and r.metric == "row_count"
+        r for r in results
+        if r.table == "vbap (excl. cancelled) -> serve_sales_orders" and r.metric == "row_count"
     )
     assert prep_result.diff_pct == serve_result.diff_pct
 
 
-# -- Business-rule filtering (data-load trigger) ------------------------------
-# With apply_business_rule_filters=True, prep/serve are compared against the
-# source population they're supposed to contain (cancelled orders
-# excluded), and the unfiltered landing checks guard the load itself. See
-# reconciliation/aggregate_checks.py's module docstring.
+# -- Business-rule filtering (both triggers) -----------------------------------
+# prep/serve are compared against the source population they're supposed to
+# contain (cancelled orders excluded), and the unfiltered landing checks
+# guard the load itself. See reconciliation/aggregate_checks.py's module
+# docstring.
 
 
 def test_landing_checks_show_no_divergence_on_healthy_run(postgres_source, duckdb_target):
@@ -153,9 +151,9 @@ def test_landing_checks_show_no_divergence_on_healthy_run(postgres_source, duckd
 
 def test_business_rule_filter_removes_cancelled_order_noise(postgres_source, duckdb_target):
     """Healthy data: every check passes even at prd's 0.5%/1% thresholds."""
-    results = run_aggregate_checks(
-        postgres_source, duckdb_target, "prd", apply_business_rule_filters=True
-    ) + run_sample_checks(postgres_source, duckdb_target, "prd", n=50, apply_business_rule_filters=True)
+    results = run_aggregate_checks(postgres_source, duckdb_target, "prd") + run_sample_checks(
+        postgres_source, duckdb_target, "prd", n=50
+    )
 
     assert all(r.status == "pass" for r in results), [r for r in results if r.status == "flag"]
     assert all(r.diff_pct == 0 for r in results)
@@ -194,7 +192,7 @@ def test_filtered_checks_still_catch_a_partial_load(postgres_source, corrupted_t
     landing/prep are views over the loaded vbap, so both must flag."""
     target = corrupted_target("delete from vbap where order_id % 10 = 0")
     flagged = _flagged_tables(
-        run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+        run_aggregate_checks(postgres_source, target, "dev")
     )
     assert ("vbap -> landing_vbap", "row_count") in flagged
     assert ("vbap -> landing_vbap", "sum_net_value") in flagged
@@ -209,7 +207,7 @@ def test_filtered_checks_still_catch_duplicated_rows(postgres_source, corrupted_
         "from vbap where order_id % 5 = 0"
     )
     flagged = _flagged_tables(
-        run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+        run_aggregate_checks(postgres_source, target, "dev")
     )
     assert ("vbap -> landing_vbap", "row_count") in flagged
     assert ("vbap (excl. cancelled) -> prep_sales_orders", "row_count") in flagged
@@ -219,7 +217,7 @@ def test_filtered_checks_still_catch_serve_layer_row_loss(postgres_source, corru
     """serve_sales_orders is a materialized table: rows lost there alone
     (landing and prep intact) must flag serve and only serve."""
     target = corrupted_target("delete from serve_sales_orders where sales_order_id % 4 = 0")
-    results = run_aggregate_checks(postgres_source, target, "dev", apply_business_rule_filters=True)
+    results = run_aggregate_checks(postgres_source, target, "dev")
     flagged = _flagged_tables(results)
     assert flagged == {
         ("vbap (excl. cancelled) -> serve_sales_orders", "row_count"),

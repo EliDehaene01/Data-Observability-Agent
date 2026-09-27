@@ -45,7 +45,7 @@ The nightly schedule always runs against `dev`'s thresholds. A manual
 `on_dbt_change.yml`), passed to the script as `TARGET_ENVIRONMENT`. Manual runs
 still append to `data-results` like scheduled ones.
 
-#### What the data-load check compares, and why
+#### What the reconciliation checks compare, and why
 
 "Either the numbers reconcile or they don't" only holds if the two sides are
 *supposed* to match. `prep_sales_orders` permanently excludes cancelled orders
@@ -68,15 +68,21 @@ and `in_process` orders are kept. It is a declared *population*, not
 interpretation. The check still just compares two numbers, over a population
 chosen so that "equal" is the correct expectation. It deliberately
 duplicates the dbt rule, so if prep's filter changes, `PREP_SOURCE_FILTERS`
-has to change with it. Until it does, data-load runs will flag the mismatch,
-which is the correct outcome.
+has to change with it. A PR that changes prep's row filter therefore flags
+that difference, which is exactly what `classify_discrepancy` should see, and
+should update `PREP_SOURCE_FILTERS` in the same PR so later runs return to 0%.
 
-Only the data-load trigger applies the filter (`apply_business_rule_filters=True`).
-The code-change trigger compares against the **unfiltered** source on purpose:
-there, the full divergence is the evidence `classify_discrepancy` weighs
-against the SQL diff, and pre-filtering it away would leave nothing to classify.
-Filtered checks carry a distinct `table` label (`vbap (excl. cancelled) -> …`),
-so the two populations never share a time series in `results_store`.
+**Both triggers compare against this same filtered population.** At first only
+data-load did. The code-change check kept the unfiltered source so the LLM
+"had something to classify", but that meant every PR inherited the permanent
+~17% gap. A comment-only change to `landing_vbak.sql` got 6/6 flags and an
+`anomaly`, blocking a PR that changed nothing. With the filter on both paths, a
+PR sees only the divergence it introduces. Adding an `in_process` exclusion to
+prep flags ~23.35% row count / ~23.61% `sum(net_value)`, which is exactly the
+in-process share of non-cancelled items. An unrelated PR flags nothing, and
+`classify_discrepancy` is skipped as having nothing to classify. Filtered checks
+carry the label `vbap (excl. cancelled) -> …`, and `analyze_diff` reads the
+table name back out of it.
 
 ### Code-change validation — PR-triggered, reasoning
 
@@ -116,7 +122,7 @@ The split above is enforced structurally, not by convention:
 `reconciliation/aggregate_checks.py` and `sample_checks.py` compare numbers and
 apply a threshold. That's the whole job. The one piece of business knowledge
 they hold is `PREP_SOURCE_FILTERS`, a static declaration of which source rows
-prep is supposed to contain, applied on the data-load trigger only (see §1).
+prep is supposed to contain, applied on both triggers (see §1).
 It chooses *what* to compare, never *what a difference means*. The checks
 report `diff_pct` like any other check and let the threshold (and, on the
 code-change path, the agent) decide what it means. If a piece of logic in here wants to *interpret* a result,
@@ -340,9 +346,19 @@ only *dishonest about this discrepancy* if the diff actually touches the affecte
 table. When `diff_touched_tables` is empty, `anomaly` stands — which is the right
 answer for a divergence in a table nobody changed.
 
+A second version of the same bug came back later. Once every run also carried
+the passing landing checks (§1), `analyze_diff` (which built
+`diff_touched_tables` from *all* results) counted `landing_vbak` as "involved"
+whenever a diff touched it. A comment-only PR to `landing_vbak.sql` was then
+downgraded to `needs_review` again, caught on a live PR run. `analyze_diff` now
+only considers **flagged** results. A passing check isn't part of the
+discrepancy being explained, so touching its table says nothing about PR
+honesty.
+
 `tests/test_agent_graph.py` pins all of this: both override-fires cases, the
-empty-`diff_touched_tables` case, the honest-PR case, and the
-no-actual-flag case.
+empty-`diff_touched_tables` case, the honest-PR case, the no-actual-flag case,
+and the passing-check-table case (`analyze_diff` → `classify_discrepancy` end
+to end).
 
 ---
 
@@ -520,7 +536,7 @@ fine with `NULL` in the new columns.
 
 **Archived pre-fix history:
 [`results_store/archive/pre-fix-2026-09-27.csv`](../results_store/archive/pre-fix-2026-09-27.csv).**
-Before the 2026-09-27 aggregate-checks fix (§1), data-load runs compared prep/serve
+Before the 2026-09-27 aggregate-checks fix (§1), runs compared prep/serve
 against the *unfiltered* source. Prep's intentional cancelled-order exclusion
 made every scheduled run flag 6/6, which was a gap in the comparison, not a
 real ongoing problem. Once the fix landed, those 183 rows (30 runs, including

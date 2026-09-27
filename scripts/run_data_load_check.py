@@ -36,12 +36,9 @@ def main() -> None:
     source = PostgresSourceConnector()
     target = DuckDBTargetConnector()
     try:
-        # Business logic hasn't changed on this trigger, so compare prep/serve
-        # against the source population they're supposed to contain -- see
-        # reconciliation/aggregate_checks.py's module docstring.
-        results = run_aggregate_checks(
-            source, target, environment, apply_business_rule_filters=True
-        ) + run_sample_checks(source, target, environment, apply_business_rule_filters=True)
+        results = run_aggregate_checks(source, target, environment) + run_sample_checks(
+            source, target, environment
+        )
     finally:
         source.close()
         target.close()
